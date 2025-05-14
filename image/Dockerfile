@@ -105,9 +105,15 @@ RUN yum install -y \
     && yum clean all \
     && rm -rf /var/cache/yum/*
 
-RUN  dnf install epel-release -y \
-&& dnf config-manager --set-enabled crb -y \
-&& dnf install ffmpeg -y --allowerasing \
+RUN dnf config-manager --set-enabled crb -y 
+
+COPY --chown=1001:0 os-ide/os-packages.txt ./os-ide/os-packages.txt
+RUN rpm -ivh https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+Retrieving https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+
+RUN  dnf install epel-release -y 
+
+RUN  dnf install ffmpeg -y --allowerasing \
 && dnf install ffmpeg-free-devel -y --allowerasing
 
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
