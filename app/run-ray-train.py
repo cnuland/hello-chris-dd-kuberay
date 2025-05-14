@@ -19,7 +19,7 @@ ModelCatalog.register_custom_model("custom_cnn", CustomCNNModel)
 num_agents = 10
 
 # Set up session
-ep_length = 2048 * 30
+ep_length = 2048 * 15
 sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
 
 env_config = {
@@ -30,8 +30,8 @@ env_config = {
     'init_state': 'ignored/dd.gb.state',
     'max_steps': ep_length,
     'print_rewards': True,
-    'save_video': False,
-    'fast_video': False,
+    'save_video': True,
+    'fast_video': True,
     'session_path': str(sess_path),  # Ensure this is str, not PosixPath
     'gb_path': 'ignored/dd.gb',
     'debug': False,
@@ -49,7 +49,11 @@ config = (
     PPOConfig()
     .environment(env="dd_env", env_config=env_config)  # Correct env name here
     .framework("torch")
-    .rollouts(num_rollout_workers=1)
+    .rollouts(
+        num_rollout_workers=3,
+        num_envs_per_worker=3,
+
+        )
     .training(model={
         "custom_model": "custom_cnn",
     })
@@ -59,7 +63,7 @@ config = (
 tune.run(
     "PPO",
     name="PPO_DoubleDragon",
-    stop={"timesteps_total": ep_length * num_agents * 1000},
+    stop={"timesteps_total": ep_length * 1000},
     checkpoint_freq=10,
     storage_path=str(Path("~/ray_results/dd").expanduser()),  # Correct usage of storage_path
     config=config.to_dict()

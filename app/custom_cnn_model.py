@@ -55,7 +55,6 @@ class CustomCNNModel(TorchModelV2, nn.Module):
 
         # Convert to float32 and normalize to [0, 1]
         x = x.float() / 255.0
-        print("Forward deminsions of the shape:",x.shape, x.dtype)
         x = self.conv_layers(x)
         self._value = self.value_branch(x)
         return self.fc(x), state

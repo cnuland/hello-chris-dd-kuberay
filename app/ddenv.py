@@ -1,3 +1,5 @@
+import random
+import string
 import sys
 import os
 from math import floor
@@ -31,6 +33,7 @@ class DDEnv(Env):
             'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True,
             'extra_buttons': False
         }
+        
         for key, val in default_config.items():
             config.setdefault(key, val)
 
@@ -56,6 +59,8 @@ class DDEnv(Env):
         self.mem_padding = 2
         self.memory_height = 8
         self.col_steps = 16
+        self.session = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4))
+
 
         self.output_full = (
             self.output_shape[0] * self.frame_stacks + 2 * (self.mem_padding + self.memory_height),
@@ -106,11 +111,13 @@ class DDEnv(Env):
     def reset(self, *, seed=None, options=None):
         with open(self.init_state, "rb") as f:
             self.pyboy.load_state(f)
+        
+        self.session = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4))
 
         if self.save_video:
             base_dir = self.s_path / Path('rollouts')
             base_dir.mkdir(exist_ok=True)
-            full_name = Path(f'full_reset_{self.reset_count}_id{self.instance_id}').with_suffix('.mp4')
+            full_name = Path(f'full_reset_{self.session}_id{self.instance_id}').with_suffix('.mp4')
             self.full_frame_writer = media.VideoWriter(base_dir / full_name, (144, 160), fps=60)
             self.full_frame_writer.__enter__()
 
