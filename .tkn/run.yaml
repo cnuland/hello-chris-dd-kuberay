@@ -13,7 +13,7 @@ spec:
   - name: deployment-name
     value: "hello-chris-ai"
   - name: git-url
-    value: https://github.com/cnuland/hello-chris-dd-kuberay.git"
+    value: "https://github.com/cnuland/hello-chris-dd-kuberay.git"
   - name: git-revision
     value: "main"
   - name: IMAGE
