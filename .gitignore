@@ -1,3 +1,59 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+.env
+.venv
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Local development settings
+.env.local
+.env.development.local
+
+# Ray output
+ray_results/
+*/ray_results/
+**/ray_results/
+/ray_results/
+/*/ray_results/
+/**/ray_results/
+ray_out/
+*/ray_out/
+/ray_out/
+.ray/
+*/.ray/
+/.ray/
+**/tune_results/
+/tmp/ray*/
+/tmp/ray-*/
+*_rays_*/
+*.rdb
+
 /app/ignored/
 app/sessions/*.zip
 app/sessions/
