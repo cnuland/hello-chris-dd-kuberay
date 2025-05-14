@@ -3,9 +3,6 @@ kind: PipelineRun
 metadata:
   name: hello-chris-ai-test
   namespace: hello-chris-ai
-  annotations:
-    argocd.argoproj.io/sync-wave: "3"
-    argocd.argoproj.io/sync-options: "SkipDryRunOnMissingResource=true"
 spec:
   serviceAccountName: pipeline
   pipelineRef:
@@ -16,17 +13,17 @@ spec:
   - name: deployment-name
     value: "hello-chris-ai"
   - name: git-url
-    value: "https://github.com/cnuland/k8s-hello-chris-ai-regression.git"
+    value: https://github.com/cnuland/hello-chris-dd-kuberay.git"
   - name: git-revision
     value: "main"
   - name: IMAGE
-    value: "quay.io/cnuland/ppo-notebook"
+    value: "quay.io/cnuland/dd-kuberay-worker"
   - name: TLSVERIFY
     value: "false"
   - name: NO_PROXY
     value: "true"
   - name: working-dir
-    value: "notebook"
+    value: "image"
   workspaces:
   - name: shared-workspace
     persistentvolumeclaim:
