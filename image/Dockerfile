@@ -102,10 +102,13 @@ RUN yum install -y \
     ${NV_LIBNPP_DEV_PACKAGE} \
     ${NV_LIBNCCL_DEV_PACKAGE} \
     ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
-    ffmpeg \
-    ffmpeg-devel \
     && yum clean all \
     && rm -rf /var/cache/yum/*
+
+RUN  dnf install epel-release -y \
+&& dnf config-manager --set-enabled crb -y \
+&& dnf install ffmpeg -y --allowerasing \
+&& dnf install ffmpeg-free-devel -y --allowerasing
 
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 
