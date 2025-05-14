@@ -105,9 +105,7 @@ RUN yum install -y \
     && yum clean all \
     && rm -rf /var/cache/yum/*
 
-RUN dnf config-manager --set-enabled crb -y 
-
-COPY --chown=1001:0 os-ide/os-packages.txt ./os-ide/os-packages.txt
+COPY --chown=1001:0 image/os-ide/os-packages.txt ./os-ide/os-packages.txt
 RUN rpm -ivh https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
 Retrieving https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
 
