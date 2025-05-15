@@ -60,6 +60,17 @@ ENV NV_LIBNCCL_VERSION=2.17.1
 ENV NCCL_VERSION=2.17.1
 ENV NV_LIBNCCL_PACKAGE=${NV_LIBNCCL_PACKAGE_NAME}-${NV_LIBNCCL_PACKAGE_VERSION}+cuda12.1
 
+COPY --chown=1001:0 image/os-ide/os-packages.txt ./os-ide/os-packages.txt
+
+RUN curl -L -o /etc/yum.repos.d/rpmfusion-free.repo https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-8.noarch.rpm && \
+    curl -L -o /etc/yum.repos.d/rpmfusion-nonfree.repo https://mirrors.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-8.noarch.rpm && \
+    rpm -ivh /etc/yum.repos.d/rpmfusion-free.repo && \
+    rpm -ivh /etc/yum.repos.d/rpmfusion-nonfree.repo && \
+    dnf clean all && \
+    dnf update -y && \
+    dnf install -y ffmpeg ffmpeg-devel --allowerasing && \
+    rm -f /etc/yum.repos.d/rpmfusion-*.repo
+
 RUN yum install -y \
     cuda-libraries-12-1-${NV_CUDA_LIB_VERSION} \
     cuda-nvtx-12-1-${NV_NVTX_VERSION} \
@@ -104,13 +115,6 @@ RUN yum install -y \
     ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
     && yum clean all \
     && rm -rf /var/cache/yum/*
-
-COPY --chown=1001:0 image/os-ide/os-packages.txt ./os-ide/os-packages.txt
-
-RUN rpm -ivh https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
-
-RUN  dnf install ffmpeg -y --allowerasing \
-&& dnf install ffmpeg-free-devel -y --allowerasing
 
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 
