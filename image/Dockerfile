@@ -32,6 +32,7 @@ RUN dnf upgrade -y && \
         git \
         curl \
         which \
+        wget \
         cuda-compat-12-1 \
         cuda-cudart-12-1-${NV_CUDA_CUDART_VERSION} \
         cuda-libraries-12-1 \
