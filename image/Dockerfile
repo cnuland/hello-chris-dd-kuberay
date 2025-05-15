@@ -27,8 +27,6 @@ RUN dnf upgrade -y && \
         python${PYTHON_VERSION} \
         python${PYTHON_VERSION}-devel \
         python${PYTHON_VERSION}-pip \
-        ffmpeg \
-        ffmpeg-devel \
         make \
         findutils \
         git \
@@ -54,6 +52,10 @@ RUN dnf upgrade -y && \
         libcudnn8-devel-8.9.0.131-1.cuda12.1 && \
     dnf clean all && \
     rm -rf /var/cache/dnf
+
+RUN dnf install -y \
+      https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-39.noarch.rpm && \
+    dnf install -y ffmpeg ffmpeg-devel
 
 # Set environment variables for CUDA + Python
 ENV PATH=/usr/local/cuda/bin:$PATH
