@@ -1,6 +1,5 @@
 ARG PYTHON_VERSION=3.11
 ARG CUDA_VERSION=12.1.1
-ARG NVARCH=x86_64
 
 FROM fedora:39
 
@@ -17,8 +16,8 @@ WORKDIR /opt/app-root/bin
 ENV NVIDIA_REQUIRE_CUDA="cuda>=12.1"
 ENV NV_CUDA_CUDART_VERSION=12.1.105-1
 
-RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${NVARCH}/cuda-rhel9.repo -o /etc/yum.repos.d/cuda.repo && \
-    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${NVARCH}/D42D0685.pub | gpg --dearmor -o /etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA && \
+RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo -o /etc/yum.repos.d/cuda.repo && \
+    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/D42D0685.pub | gpg --dearmor -o /etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA && \
     echo "gpgcheck=1" >> /etc/yum.repos.d/cuda.repo && \
     echo "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA" >> /etc/yum.repos.d/cuda.repo
 
