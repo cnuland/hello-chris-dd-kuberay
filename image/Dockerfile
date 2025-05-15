@@ -62,14 +62,9 @@ ENV NV_LIBNCCL_PACKAGE=${NV_LIBNCCL_PACKAGE_NAME}-${NV_LIBNCCL_PACKAGE_VERSION}+
 
 COPY --chown=1001:0 image/os-ide/os-packages.txt ./os-ide/os-packages.txt
 
-RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
-    # Install RPM Fusion Free & Non-Free for EL9
-    dnf install -y https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm && \
-    dnf install -y https://mirrors.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm && \
-    dnf update -y && \
-    dnf install -y ffmpeg ffmpeg-devel --allowerasing && \
-    dnf clean all && \
-    rm -rf /var/cache/yum
+RUN curl -L -o /usr/local/bin/ffmpeg https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
+    tar -xJf /usr/local/bin/ffmpeg -C /usr/local/bin --strip-components=1 --wildcards '*/ffmpeg' && \
+    chmod +x /usr/local/bin/ffmpeg
 
 RUN yum install -y \
     cuda-libraries-12-1-${NV_CUDA_LIB_VERSION} \
