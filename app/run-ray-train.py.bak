@@ -1,100 +1,70 @@
+
 from os.path import exists
 from pathlib import Path
 import uuid
-import random
 from ddenv import DDEnv
-from typing import Callable, Union
-from PIL import Image
 import warnings
 warnings.filterwarnings("ignore")
-import ray
-from ray.rllib.algorithms.ppo import PPOConfig, PPO
-from ray.tune.registry import register_env
-from ray.train import RunConfig
-from ray import tune
-from torch import nn
-from tensorboard_callback import TensorboardCallback
 
+import ray
+from ray.rllib.algorithms.ppo import PPOConfig
+from ray.tune.registry import register_env
+from ray import tune
+from ray.rllib.models import ModelCatalog
+from custom_cnn_model import CustomCNNModel
+
+ModelCatalog.register_custom_model("custom_cnn", CustomCNNModel)
+
+# Define parallel rollout agents
 num_agents = 10
 
-def make_env(rank, env_conf, seed=0):
-    """
-    Utility function for multiprocessed env.
-    :param env_id: (str) the environment ID
-    :param num_env: (int) the number of environments you wish to have in subprocesses
-    :param seed: (int) the initial seed for RNG
-    :param rank: (int) index of the subprocess
-    """
-    def _init():
-        env = DDEnv(env_conf)
-        env.reset(seed=(seed + rank))
-        return env
-    return _init
+# Set up session
+ep_length = 2048 * 15
+sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
 
-if __name__ == '__main__':
-    ep_length = 2048 * 30
-    sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
+env_config = {
+    'headless': True,
+    'save_final_state': True,
+    'early_stop': False,
+    'action_freq': 8,
+    'init_state': 'ignored/dd.gb.state',
+    'max_steps': ep_length,
+    'print_rewards': True,
+    'save_video': True,
+    'fast_video': True,
+    'session_path': str(sess_path),  # Ensure this is str, not PosixPath
+    'gb_path': 'ignored/dd.gb',
+    'debug': False,
+    'sim_frame_dist': 2_000_000.0,
+    'use_screen_explore': True,
+    'extra_buttons': False
+}
 
-    env_config = {
-        'headless': True,
-        'save_final_state': True,
-        'early_stop': False,
-        'action_freq': 8,
-        'init_state': 'ignored/dd.gb.state',
-        'max_steps': ep_length,
-        'print_rewards': True,
-        'save_video': False,
-        'fast_video': False,
-        'session_path': sess_path,
-        'gb_path': 'ignored/dd.gb',
-        'debug': False,
-        'sim_frame_dist': 2_000_000.0,
-        'use_screen_explore': True,
-        'extra_buttons': False
-    }
+# Register custom environment
+register_env("dd_env", lambda config: DDEnv(config))
 
-    env_options = {
-        "corridor_length": 10,
-        "max_steps": 100,
-        "num_agents": num_agents,
-    }
+ray.init()
 
-    custom_config = {
-        "model": {
-            "conv_filters": [
-                [32, [4, 4], 2],
-                [64, [3, 3], 2],
-                [128, [3, 3], 2],
-                [256, [2, 2], 2],
-                [512, [2, 2], 1]
-            ],
-            "conv_activation": "relu",
-            "post_fcnet_hiddens": [7168, 512, 256],
-            "fcnet_hiddens": [512, 256],
-            "no_final_linear": False,
-            "_disable_preprocessor_api": True,
-            "vf_share_layers": True
-        }
-    }
+config = (
+    PPOConfig()
+    .environment(env="dd_env", env_config=env_config)  # Correct env name here
+    .framework("torch")
+    .rollouts(
+        num_rollout_workers=3,
+        num_envs_per_worker=3,
 
-    base_config = (
-        PPOConfig()
-        .environment("dd")
-        .debugging(log_level="INFO")
-        .framework(framework="torch")
-        .env_runners(num_envs_per_env_runner=3, num_cpus_per_env_runner=3)
-    )
+        )
+    .training(model={
+        "custom_model": "custom_cnn",
+    })
+)
 
-    base_config.training(model=custom_config["model"])
-
-    ray.init()
-    env_name = "dd"
-    register_env(env_name, DDEnv)
-    tune.run(
-        "PPO",
-        name="PPO",
-        stop={"timesteps_total": 2048 * 30 * 12 * 1000},
-        checkpoint_freq=10,
-        storage_path="~/ray_results/" + env_name,
-        config=base_config.to_dict(),
-    )
+# Run training
+tune.run(
+    "PPO",
+    name="PPO_DoubleDragon",
+    stop={"timesteps_total": ep_length * 1000},
+    checkpoint_freq=10,
+    storage_path=str(Path("~/ray_results/dd").expanduser()),  # Correct usage of storage_path
+    config=config.to_dict()
+)
