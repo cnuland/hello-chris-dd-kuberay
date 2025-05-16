@@ -77,6 +77,6 @@ RUN micropipenv install && rm -f ./Pipfile.lock
 
 # Add license and restore workspace
 COPY --chown=1001:0 image/NGC-DL-CONTAINER-LICENSE ./
-COPY --chown=1001:0 ../app ./app
+COPY --chown=1001:0 ../app /opt/app-root/src/app
 USER 1001
 WORKDIR /opt/app-root/src
