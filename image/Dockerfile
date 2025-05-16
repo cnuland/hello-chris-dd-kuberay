@@ -33,6 +33,7 @@ RUN dnf upgrade -y && \
         curl \
         which \
         wget \
+        mesa-libGL \
         cuda-compat-12-1 \
         cuda-cudart-12-1-${NV_CUDA_CUDART_VERSION} \
         cuda-libraries-12-1 \
