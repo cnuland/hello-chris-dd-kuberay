@@ -113,17 +113,11 @@ ENV NV_CUDNN_PACKAGE_DEV=libcudnn8-devel-${NV_CUDNN_VERSION}.cuda12.1
 LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
 
 RUN dnf -y update --setopt=tsflags=nodocs && \
-    # Install dnf-plugins-core and the specific dnf-command(crb) if needed
     dnf install -y dnf-plugins-core && \
-    dnf install -y 'dnf-command(crb)' && \
-    # Enable the CodeReady Builder (CRB) repository using the 'dnf crb enable' command
-    echo "Enabling CRB repository..." && \
-    dnf -y crb enable && \
-    echo "CRB repository enabled." && \
-    # Install EPEL release, which defines the EPEL repository
+    echo "Manually enabling CRB repository..." && \
+    curl -o /etc/yum.repos.d/ubi9-crb.repo https://ftp.redhat.com/redhat/ubi/ubi9/CRB/x86_64/crb.repo && \
+    echo "CRB repository enabled manually." && \
     dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
-    # After CRB and EPEL repos are configured, try to install the problematic dependencies for ffmpeg.
-    echo "Attempting to install explicit ffmpeg dependencies..." && \
     dnf install -y \
         SDL2 \
         libv4l \
@@ -132,18 +126,11 @@ RUN dnf -y update --setopt=tsflags=nodocs && \
         SDL2-devel \
         libv4l-devel \
         openal-soft-devel \
-        libcdio-devel \
-    && echo "Explicit ffmpeg dependencies (attempted) installation complete." && \
-    # Now install RPM Fusion release packages (free and non-free)
+        libcdio-devel && \
     dnf install -y \
         https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm \
-        https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm \
-    && echo "RPM Fusion repos installed." && \
-    # Finally, install ffmpeg and its devel package.
-    # Its lower-level dependencies should now be satisfied from the previous step.
+        https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm && \
     dnf install -y ffmpeg ffmpeg-devel && \
-    echo "ffmpeg and ffmpeg-devel installed." && \
-    # Clean up
     dnf clean all && \
     rm -rf /var/cache/dnf/*
 
