@@ -18,7 +18,7 @@ einops = "*"
 mediapy = {git = "https://github.com/PWhiddy/mediapy.git", ref = "45101800d4f6adeffe814cad93de1db67c1bd614"}
 
 # OpenCV + Visualization
-opencv-python-headless = "*"
+opencv-python = "*"
 imageio = "*"
 matplotlib = "*"
 seaborn = "*"
