@@ -5,13 +5,14 @@ name = "pypi"
 
 [packages]
 # Core AI + RL
-ray = "~=2.44.0"
-gymnasium = "~=0.28.1"
+ray = {version = "==2.44.0", extras = ["data","train","tune","serve","default"]}
+gymnasium = "==0.28.1"
 stable-baselines3 = "~=2.0.0"
 torch = ">=2.2.0,<2.7.0"
 jax = "~=0.4.19"
 jaxlib = "~=0.4.19"
 ml-dtypes = "*"
+einops = "*"
 
 # Git dependency (keep pinned)
 mediapy = {git = "https://github.com/PWhiddy/mediapy.git", ref = "45101800d4f6adeffe814cad93de1db67c1bd614"}
