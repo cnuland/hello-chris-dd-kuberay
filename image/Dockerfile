@@ -117,6 +117,7 @@ RUN dnf -y install \
         https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
     dnf -y install \
         https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm && \
+    dnf -y install \
         https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm && \
     dnf -y update && \
     dnf -y install ffmpeg ffmpeg-devel && \
