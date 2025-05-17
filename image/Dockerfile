@@ -125,8 +125,11 @@ RUN dnf install -y mesa-libGL && \
 
 # Install system packages like ffmpeg
 # Using RPM Fusion for EL9 (Enterprise Linux 9)
-RUN dnf install -y \
-      https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm && \
+RUN dnf install -y 'dnf-command(config-manager)' || true && \
+    dnf config-manager --set-enabled crb || true && \
+    dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    dnf install -y https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm && \
+    dnf install -y https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm && \
     dnf install -y ffmpeg ffmpeg-devel && \
     dnf clean all && \
     rm -rf /var/cache/dnf/*
