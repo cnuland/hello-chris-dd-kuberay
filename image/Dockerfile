@@ -113,12 +113,13 @@ ENV NV_CUDNN_PACKAGE_DEV=libcudnn8-devel-${NV_CUDNN_VERSION}.cuda12.1
 LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
 
 RUN dnf -y update --setopt=tsflags=nodocs && \
-    # Install dnf-plugins-core for dnf commands like 'crb'
+    # Install dnf-plugins-core and the specific dnf-command(crb) if needed
     dnf install -y dnf-plugins-core && \
+    dnf install -y 'dnf-command(crb)' && \
     # Enable the CodeReady Builder (CRB) repository using the 'dnf crb enable' command
     echo "Enabling CRB repository..." && \
     dnf -y crb enable && \
-    echo "CRB repository enabled (or already was)." && \
+    echo "CRB repository enabled." && \
     # Install EPEL release, which defines the EPEL repository
     dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
     # After CRB and EPEL repos are configured, try to install the problematic dependencies for ffmpeg.
