@@ -112,25 +112,14 @@ ENV NV_CUDNN_PACKAGE_DEV=libcudnn8-devel-${NV_CUDNN_VERSION}.cuda12.1
 
 LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
 
-RUN dnf -y update --setopt=tsflags=nodocs && \
-    dnf install -y dnf-plugins-core && \
-    echo "Manually enabling CRB repository..." && \
-    curl -o /etc/yum.repos.d/ubi9-crb.repo https://ftp.redhat.com/redhat/ubi/ubi9/CRB/x86_64/crb.repo && \
-    echo "CRB repository enabled manually." && \
-    dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
-    dnf install -y \
-        SDL2 \
-        libv4l \
-        openal-soft \
-        libcdio \
-        SDL2-devel \
-        libv4l-devel \
-        openal-soft-devel \
-        libcdio-devel && \
-    dnf install -y \
-        https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm \
+# Enable EPEL and RPM Fusion repos and install ffmpeg
+RUN dnf -y install \
+        https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    dnf -y install \
+        https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm && \
         https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm && \
-    dnf install -y ffmpeg ffmpeg-devel && \
+    dnf -y update && \
+    dnf -y install ffmpeg ffmpeg-devel && \
     dnf clean all && \
     rm -rf /var/cache/dnf/*
 
