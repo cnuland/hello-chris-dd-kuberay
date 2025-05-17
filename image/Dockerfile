@@ -112,35 +112,20 @@ ENV NV_CUDNN_PACKAGE_DEV=libcudnn8-devel-${NV_CUDNN_VERSION}.cuda12.1
 
 LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
 
-RUN yum install -y \
-    ${NV_CUDNN_PACKAGE} \
-    ${NV_CUDNN_PACKAGE_DEV} \
-    && yum clean all \
-    && rm -rf /var/cache/yum/*
-
-# Install system dependency for OpenCV (libGL)
-RUN dnf install -y mesa-libGL && \
-    dnf clean all && \
-    rm -rf /var/cache/dnf/*
-
-# Install system packages like ffmpeg
-# Using RPM Fusion for EL9 (Enterprise Linux 9)
 RUN dnf -y update --setopt=tsflags=nodocs && \
-    # Install dnf-plugins-core for config-manager if not already present, and enable CRB
-    # UBI 9 uses 'crb', RHEL proper often uses 'codeready-builder-for-rhel-9-*-rpms'
+    # Install dnf-plugins-core for config-manager if not already present
     dnf install -y dnf-plugins-core && \
-    dnf config-manager --set-enabled crb && \
+    # Enable the CodeReady Builder (CRB) repository using its full name for UBI 9
+    dnf config-manager --set-enabled ubi-9-crb-rpms && \
     # Install EPEL release, which defines the EPEL repository
     dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
     # After CRB and EPEL repos are configured, try to install the problematic dependencies for ffmpeg.
-    # These should come from UBI/CRB/EPEL.
     echo "Attempting to install explicit ffmpeg dependencies..." && \
     dnf install -y \
         SDL2 \
         libv4l \
         openal-soft \
         libcdio \
-        # Add -devel packages too, as ffmpeg-devel is being installed
         SDL2-devel \
         libv4l-devel \
         openal-soft-devel \
