@@ -130,6 +130,7 @@ RUN pip install --no-cache-dir -U "micropipenv[toml]"
 # Also, ensure Python version compatibility (this Dockerfile uses Python 3.9).
 COPY image/Pipfile.lock ./
 
+RUN pip install -U "ray[data,train,tune,serve]"
 RUN micropipenv install && rm -f ./Pipfile.lock
 
 # Restore user workspace
