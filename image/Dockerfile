@@ -125,12 +125,37 @@ RUN dnf install -y mesa-libGL && \
 
 # Install system packages like ffmpeg
 # Using RPM Fusion for EL9 (Enterprise Linux 9)
-RUN dnf install -y 'dnf-command(config-manager)' || true && \
-    dnf config-manager --set-enabled crb || true && \
+RUN dnf -y update --setopt=tsflags=nodocs && \
+    # Install dnf-plugins-core for config-manager if not already present, and enable CRB
+    # UBI 9 uses 'crb', RHEL proper often uses 'codeready-builder-for-rhel-9-*-rpms'
+    dnf install -y dnf-plugins-core && \
+    dnf config-manager --set-enabled crb && \
+    # Install EPEL release, which defines the EPEL repository
     dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
-    dnf install -y https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm && \
-    dnf install -y https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm && \
+    # After CRB and EPEL repos are configured, try to install the problematic dependencies for ffmpeg.
+    # These should come from UBI/CRB/EPEL.
+    echo "Attempting to install explicit ffmpeg dependencies..." && \
+    dnf install -y \
+        SDL2 \
+        libv4l \
+        openal-soft \
+        libcdio \
+        # Add -devel packages too, as ffmpeg-devel is being installed
+        SDL2-devel \
+        libv4l-devel \
+        openal-soft-devel \
+        libcdio-devel \
+    && echo "Explicit ffmpeg dependencies (attempted) installation complete." && \
+    # Now install RPM Fusion release packages (free and non-free)
+    dnf install -y \
+        https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm \
+        https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm \
+    && echo "RPM Fusion repos installed." && \
+    # Finally, install ffmpeg and its devel package.
+    # Its lower-level dependencies should now be satisfied from the previous step.
     dnf install -y ffmpeg ffmpeg-devel && \
+    echo "ffmpeg and ffmpeg-devel installed." && \
+    # Clean up
     dnf clean all && \
     rm -rf /var/cache/dnf/*
 
