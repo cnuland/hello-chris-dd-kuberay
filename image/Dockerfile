@@ -113,16 +113,13 @@ ENV NV_CUDNN_PACKAGE_DEV=libcudnn8-devel-${NV_CUDNN_VERSION}.cuda12.1
 LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
 
 # Enable EPEL and RPM Fusion repos and install ffmpeg
-RUN dnf -y install \
-        https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
-    dnf -y install \
-        https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm && \
-    dnf -y install \
-        https://download1.rpmfusion.org/nonfree/el/rpmfusion-nonfree-release-9.noarch.rpm && \
-    dnf -y update && \
-    dnf -y install ffmpeg ffmpeg-devel && \
-    dnf clean all && \
-    rm -rf /var/cache/dnf/*
+RUN curl -L -o /usr/local/bin/ffmpeg https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
+    mkdir -p /tmp/ffmpeg && \
+    tar -xf /usr/local/bin/ffmpeg -C /tmp/ffmpeg --strip-components=1 && \
+    mv /tmp/ffmpeg/ffmpeg /usr/local/bin/ffmpeg && \
+    mv /tmp/ffmpeg/ffprobe /usr/local/bin/ffprobe && \
+    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+    rm -rf /tmp/ffmpeg /usr/local/bin/ffmpeg
 
 # Install micropipenv to deploy packages from Pipfile.lock
 RUN pip install --no-cache-dir -U "micropipenv[toml]"
