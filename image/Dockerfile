@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/python-39:latest
+FROM registry.access.redhat.com/ubi9/python-311:latest
 
 LABEL name="ray-ubi9-py39-cu121" \
       summary="CUDA 12.1 Python 3.9 image based on UBI9 for Ray" \
@@ -118,14 +118,26 @@ RUN yum install -y \
     && yum clean all \
     && rm -rf /var/cache/yum/*
 
-# Install Python packages
+# Install system dependency for OpenCV (libGL)
+RUN dnf install -y mesa-libGL && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf/*
+
+# Install system packages like ffmpeg
+# Using RPM Fusion for EL9 (Enterprise Linux 9)
 RUN dnf install -y \
-      https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-39.noarch.rpm && \
-    dnf install -y ffmpeg ffmpeg-devel
+      https://download1.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm && \
+    dnf install -y ffmpeg ffmpeg-devel && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf/*
+
 # Install micropipenv to deploy packages from Pipfile.lock
 RUN pip install --no-cache-dir -U "micropipenv[toml]"
 
 # Install Python dependencies from Pipfile.lock file
+# Ensure your Pipfile.lock specifies the Ray version (e.g., ray[rllib]==2.38.0)
+# for which your run-ray-dd.py script is currently tailored.
+# Also, ensure Python version compatibility (this Dockerfile uses Python 3.9).
 COPY image/Pipfile.lock ./
 
 RUN micropipenv install && rm -f ./Pipfile.lock
