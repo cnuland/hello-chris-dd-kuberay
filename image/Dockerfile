@@ -85,14 +85,13 @@ RUN yum install -y \
     ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
     && yum clean all && rm -rf /var/cache/yum/*
 
-# Download and install cuDNN
-RUN curl -L -o /tmp/cudnn-linux-x86_64-8.5.0.96_cuda11.tar.xz https://cudnn-nginx-route-cudnn-host.apps.rosa.rosa-wswzx.e1i3.p3.openshiftapps.com/cudnn-linux-x86_64-8.5.0.96_cuda11.tar.xz && \
-    tar -xvf /tmp/cudnn-linux-x86_64-8.5.0.96_cuda11.tar.xz -C /tmp && \
-    cp /tmp/cuda/include/cudnn*.h /usr/local/cuda/include && \
-    cp /tmp/cuda/lib64/libcudnn* /usr/local/cuda/lib64 && \
-    chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn* && \
-    rm -rf /tmp/cudnn-linux-x86_64-8.5.0.96_cuda11*
 
+# Download and install cuDNN
+RUN curl -k -L -o /tmp/cudnn.rpm https://cudnn-nginx-route-cudnn-host.apps.rosa.rosa-wswzx.e1i3.p3.openshiftapps.com/cudnn-local-repo-rhel8-8.5.0.96-1.0-1.x86_64.rpm && \
+    rpm -ivh /tmp/cudnn.rpm && \
+    rm /tmp/cudnn.rpm
+
+RUN ldconfig
 RUN ln -sf /usr/local/cuda/lib64/libcudnn.so.8 /usr/local/cuda/lib64/libcudnn.so
 
 # === FFmpeg (static build) ===
