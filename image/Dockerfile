@@ -43,12 +43,6 @@ RUN yum upgrade -y && \
     findutils \
     && yum clean all && rm -rf /var/cache/yum/*
 
-# Optional: cuDNN 8 for CUDA 11.7
-ENV NV_CUDNN_VERSION=8.5.0.96
-RUN yum install -y \
-    libcudnn8-${NV_CUDNN_VERSION}.cuda11.7 \
-    libcudnn8-devel-${NV_CUDNN_VERSION}.cuda11.7 \
-    && yum clean all && rm -rf /var/cache/yum/*
 
 # Install ffmpeg (static build)
 RUN curl -L -o /tmp/ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
