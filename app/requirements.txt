@@ -70,7 +70,6 @@ nbformat==5.9.2
 networkx==3.1
 numpy==1.25.0
 oauthlib==3.2.2
-opencv-python==4.7.0.72
 opt-einsum==3.3.0
 ormsgpack==1.7.0
 packaging==23.1
