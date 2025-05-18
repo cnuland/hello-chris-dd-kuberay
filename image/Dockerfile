@@ -85,16 +85,14 @@ RUN yum install -y \
     ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
     && yum clean all && rm -rf /var/cache/yum/*
 
-ENV NV_CUDNN_VERSION=9.10.1.4-1
-ENV NV_CUDNN_PACKAGE=libcudnn9-cuda-11
-ENV NV_CUDNN_PACKAGE_DEV=libcudnn9-devel-cuda-11
+# Copy and install cuDNN 8.5.0.96 (RHEL8 RPM)
+COPY image/cudnn-local-repo-rhel8-8.5.0.96-1.0-1.x86_64.rpm /tmp/
 
-LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
-
-RUN yum install -y \
-    ${NV_CUDNN_PACKAGE} \
-    ${NV_CUDNN_PACKAGE_DEV} \
-    && yum clean all && rm -rf /var/cache/yum/*
+RUN rpm -i /tmp/cudnn-local-repo-rhel8-8.5.0.96-1.0-1.x86_64.rpm && \
+    cp /var/cudnn-local-repo-rhel8-8.5.0.96/cudnn-*-keyring.gpg /etc/pki/rpm-gpg/ && \
+    yum clean all && \
+    yum -y install libcudnn8 libcudnn8-devel && \
+    yum clean all && rm -rf /var/cache/yum /tmp/cudnn-local-repo-rhel8-8.5.0.96-1.0-1.x86_64.rpm /var/cudnn-local-repo-rhel8-8.5.0.96
 
 # === FFmpeg (static build) ===
 RUN curl -L -o /tmp/ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
