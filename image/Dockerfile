@@ -112,6 +112,15 @@ RUN yum install -y \
     && rm -rf /var/cache/yum/*
 
 
+# Install ffmpeg (static build)
+RUN curl -L -o /tmp/ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
+    mkdir -p /tmp/ffmpeg && \
+    tar -xf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 && \
+    mv /tmp/ffmpeg/ffmpeg /usr/local/bin/ffmpeg && \
+    mv /tmp/ffmpeg/ffprobe /usr/local/bin/ffprobe && \
+    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+    rm -rf /tmp/ffmpeg*
+
 # Micropipenv install (for Pipfile.lock support)
 RUN pip install --no-cache-dir -U "micropipenv[toml]"
 
