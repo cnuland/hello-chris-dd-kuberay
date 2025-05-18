@@ -33,6 +33,14 @@ ENV NV_LIBCUBLAS_VERSION 11.10.3.66-1
 # NCCL for CUDA 11.7
 ENV NV_LIBNCCL_PACKAGE_VERSION 2.14.3-1
 
+# Install PyTorch, torchvision, and torchaudio using --extra-index-url
+# Add -vvv for verbose output from pip if issues persist
+RUN python3.11 -m pip install --no-cache-dir -vvv \
+    torch==2.0.1+cu117 \
+    torchvision==0.15.2 \
+    torchaudio==2.0.2 \
+    --extra-index-url https://download.pytorch.org/whl/cu117
+
 # CUDA repo setup - ensure this repo file is for RHEL9 and provides CUDA 11.7 packages
 COPY image/cuda.repo-x86_64 /etc/yum.repos.d/cuda.repo
 RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${NVARCH}/D42D0685.pub \
