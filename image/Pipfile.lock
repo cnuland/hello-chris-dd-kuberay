@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "38d9e64c4738eaab9607c4d3ff1b5540a480d20778d75a551dbf015b8a42a48b"
+            "sha256": "3a68ee77fa7ec312c5b4888cb36078555ea1f3a11f9e19376ab5acbdf5ca393f"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -906,12 +906,12 @@
         },
         "gymnasium": {
             "hashes": [
-                "sha256:1a532752efcb7590478b1cc7aa04f608eb7a2fdad5570cd217b66b6a35274bb1",
-                "sha256:61c3384b5575985bb7f85e43213bcb40f36fcdff388cae6bc229304c71f2843e"
+                "sha256:4c2c745808792c8f45c6e88ad0a5504774394e0c126f6e3db555e720d3da6f24",
+                "sha256:7bc9a5bce1022f997d1dbc152fc91d1ac977bad9cc7794cdc25437010867cabf"
             ],
             "index": "pypi",
-            "markers": "python_version >= '3.8'",
-            "version": "==0.29.1"
+            "markers": "python_version >= '3.7'",
+            "version": "==0.28.1"
         },
         "h11": {
             "hashes": [
@@ -1012,6 +1012,14 @@
             "index": "pypi",
             "markers": "python_version >= '3.9'",
             "version": "==0.4.19"
+        },
+        "jax-jumpy": {
+            "hashes": [
+                "sha256:195fb955cc4c2b7f0b1453e3cb1fb1c414a51a407ffac7a51e69a73cb30d59ad",
+                "sha256:ab7e01454bba462de3c4d098e3e585c302a8f06bc36d9182ab4e7e4aa7067c5e"
+            ],
+            "markers": "python_version >= '3.7'",
+            "version": "==1.0.0"
         },
         "jaxlib": {
             "hashes": [
