@@ -34,7 +34,7 @@ RUN echo "/usr/local/nvidia/lib" >> /etc/ld.so.conf.d/nvidia.conf && \
     echo "/usr/local/nvidia/lib64" >> /etc/ld.so.conf.d/nvidia.conf
 
 ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH}
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 ENV XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda
 
@@ -85,12 +85,7 @@ RUN yum install -y \
     ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
     && yum clean all && rm -rf /var/cache/yum/*
 
-ENV NV_CUDNN_VERSION=9.10.1.4-1
-ENV NV_CUDNN_PACKAGE=libcudnn9-cuda-11
-ENV NV_CUDNN_PACKAGE_DEV=libcudnn9-devel-cuda-11
-
-LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
-
+# === cuDNN 8.5 manual install ===
 RUN curl -L -o cudnn.tgz https://developer.download.nvidia.com/compute/redist/cudnn/v8.5.0/cudnn-linux-x86_64-8.5.0.96_cuda11-archive.tar.xz && \
     tar -xf cudnn.tgz && \
     cp cudnn-linux-x86_64-8.5.0.96_cuda11-archive/include/* /usr/local/cuda/include/ && \
@@ -117,3 +112,4 @@ RUN micropipenv install && rm -f ./Pipfile.lock
 # Final user and working directory
 USER 1001
 WORKDIR /opt/app-root/src
+
