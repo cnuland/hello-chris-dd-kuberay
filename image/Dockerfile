@@ -21,7 +21,7 @@ RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${
 
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 
@@ -43,6 +43,13 @@ RUN yum upgrade -y && \
     findutils \
     && yum clean all && rm -rf /var/cache/yum/*
 
+# Install cuDNN 8.5.0.96 for CUDA 11.x
+RUN curl -L -o cudnn.tar.xz https://developer.download.nvidia.com/compute/redist/cudnn/v8.5.0/cudnn-linux-x86_64-8.5.0.96_cuda11-archive.tar.xz && \
+    tar -xf cudnn.tar.xz && \
+    cp -P cudnn-linux-x86_64-8.5.0.96_cuda11-archive/include/* /usr/local/cuda/include/ && \
+    cp -P cudnn-linux-x86_64-8.5.0.96_cuda11-archive/lib/* /usr/local/cuda/lib64/ && \
+    chmod a+r /usr/local/cuda/include/* /usr/local/cuda/lib64/* && \
+    rm -rf cudnn.tar.xz cudnn-linux*
 
 # Install ffmpeg (static build)
 RUN curl -L -o /tmp/ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
