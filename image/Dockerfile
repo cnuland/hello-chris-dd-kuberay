@@ -15,7 +15,7 @@ ENV NVIDIA_REQUIRE_CUDA="cuda>=11.7 brand=tesla,driver>=470,driver<471 brand=unk
 
 ENV NV_CUDA_CUDART_VERSION=11.7.99-1
 
-COPY cuda.repo-x86_64 /etc/yum.repos.d/cuda.repo
+COPY image/cuda.repo-x86_64 /etc/yum.repos.d/cuda.repo
 
 RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${NVARCH}/D42D0685.pub \
   | sed '/^Version/d' > /etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA
@@ -36,7 +36,7 @@ RUN echo "/usr/local/nvidia/lib" >> /etc/ld.so.conf.d/nvidia.conf && \
 ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
 
-COPY NGC-DL-CONTAINER-LICENSE /
+COPY image/NGC-DL-CONTAINER-LICENSE /
 
 # nvidia-container-runtime
 ENV NVIDIA_VISIBLE_DEVICES=all
