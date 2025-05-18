@@ -63,8 +63,6 @@ RUN yum install -y \
     && yum clean all && rm -rf /var/cache/yum/*
 
 # === CUDA Development Tools ===
-ENV NV_NVPROF_VERSION=11.7.50-1
-ENV NV_NVPROF_DEV_PACKAGE=cuda-nvprof-11-7-${NV_NVPROF_VERSION}
 ENV NV_CUDA_CUDART_DEV_VERSION=11.7.99-1
 ENV NV_NVML_DEV_VERSION=11.7.91-1
 ENV NV_LIBCUBLAS_DEV_PACKAGE=libcublas-devel-11-8-${NV_LIBCUBLAS_VERSION}
@@ -80,7 +78,6 @@ RUN yum install -y \
     cuda-libraries-devel-11-7-${NV_CUDA_LIB_VERSION} \
     cuda-minimal-build-11-7-${NV_CUDA_LIB_VERSION} \
     cuda-cudart-devel-11-7-${NV_CUDA_CUDART_DEV_VERSION} \
-    ${NV_NVPROF_DEV_PACKAGE} \
     cuda-nvml-devel-11-7-${NV_NVML_DEV_VERSION} \
     ${NV_LIBCUBLAS_DEV_PACKAGE} \
     ${NV_LIBNPP_DEV_PACKAGE} \
