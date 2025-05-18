@@ -11,11 +11,11 @@ import os
 # Import your custom modules directly.
 # Ensure dd_env.py and custom_cnn_model.py are in the same directory
 # or correctly placed in your Docker image's PYTHONPATH / WORKDIR.
-from ddenv import DDEnv
+from ddenv import DDEnv # Assuming this is the Gymnasium 1.0.0 compatible version
 from custom_cnn_model import CustomCNNModel
 
 warnings.filterwarnings("ignore", category=UserWarning, module="gymnasium")
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning) # Keep this for now
 
 def main():
     """
@@ -38,78 +38,96 @@ def main():
     # --- End Registrations ---
 
     # --- Configuration ---
-    ep_length = 2048 * 15
+    ep_length = 2048 * 15 # Original episode length
+    # For faster testing during debugging, you might want to reduce this:
+    # ep_length = 2048 
+
     base_env_config = { # This will be part of the PPOConfig's env_config
         'headless': True, 'save_final_state': True, 'early_stop': False,
         'action_freq': 8, 'init_state': 'ignored/dd.gb.state', 'max_steps': ep_length,
-        'print_rewards': False, 'save_video': True, 'fast_video': True,
+        'print_rewards': False, # Set to False for less log spam from workers; RLlib logs aggregated rewards
+        'save_video': True,    # Set to True if you want videos from workers
+        'fast_video': True,
         'gb_path': 'ignored/dd.gb', 'debug': False,
         'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True, 'extra_buttons': False
     }
 
-    num_rollout_workers = 3
-    num_envs_per_worker = 3
-    # Assuming the driver (this script) runs on the head node,
-    # which has a GPU as per your KubeRay setup.
-    ppo_learner_num_gpus = 1
+    num_rollout_workers = 3 # As per your original setup
+    num_envs_per_worker = 3 # As per your original setup
+    
+    # Learner GPU (driver process on head node)
+    # Your Ray cluster head has 1 GPU.
+    ppo_learner_num_gpus = 1 if int(ray.cluster_resources().get("GPU", 0)) > 0 else 0
+
 
     # 1. Create the PPOConfig instance
     ppo_algo_config = PPOConfig()
 
     # 2. Set PPO-specific attributes directly on the instance.
-    #    This is the fix for the TypeError related to __init__ and previous 'int not callable'.
     ppo_algo_config.sgd_minibatch_size = 500
     ppo_algo_config.num_sgd_iter = 10
-    # If you have other PPO-specific parameters like clip_param, use_critic, use_gae, kl_coeff, etc.,
-    # set them here as direct attributes if they are not constructor args or part of .training().
-    # Example:
+    # Add other PPO-specific parameters as needed, e.g.:
     # ppo_algo_config.clip_param = 0.2
     # ppo_algo_config.use_gae = True
-    # ppo_algo_config.lambda_ = 0.95
+    # ppo_algo_config.lambda_ = 0.95 # GAE lambda
     # ppo_algo_config.vf_loss_coeff = 0.5
     # ppo_algo_config.entropy_coeff = 0.01
 
-    # 3. Apply general AlgorithmConfig builder methods to the modified config object
+
+    # 3. Apply general AlgorithmConfig builder methods
     ppo_algo_config = (
         ppo_algo_config # Start chaining from the config object with attributes set
         .environment(env="dd_env", env_config=base_env_config, disable_env_checking=True)
         .framework("torch")
-        .env_runners(
+        .env_runners( # Or .rollout_workers for older Ray versions if .env_runners causes issues with 2.44.0
             num_env_runners=num_rollout_workers,
             num_envs_per_env_runner=num_envs_per_worker,
-            num_cpus_per_env_runner=3,
+            num_cpus_per_env_runner=3, # CPUs per rollout worker actor
+            # num_gpus_per_env_runner=0 # If envs themselves don't use GPU
         )
-        .training( # General training parameters
-            model={"custom_model": "custom_cnn"},
+        .training( 
+            model={"custom_model": "custom_cnn"}, # This uses the ModelV2 API
             gamma=0.99,
             lr=5e-5,
-            train_batch_size=5000 # This is a general AlgorithmConfig training parameter
+            train_batch_size=5000 
         )
-        .resources(num_gpus=ppo_learner_num_gpus) # For the learner/driver
-        .debugging(log_level="INFO")
+        .resources(
+            num_gpus=ppo_learner_num_gpus # GPUs for the PPO learner process
+        )
+        .debugging(
+            log_level="INFO" # Or "DEBUG" for more verbose RLlib logs
+        )
+        # --- CRITICAL FIX: Deactivate the new API stack ---
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False
+        )
+        # --- END CRITICAL FIX ---
     )
     # --- End Configuration ---
 
     full_ppo_config_dict = ppo_algo_config.to_dict()
     
-    # Define storage path for results (ensure this path is writable on the head node)
     storage_path = str(Path("~/ray_results_kuberay/dd_ppo_minimal_corrected").expanduser())
-    Path(storage_path).mkdir(parents=True, exist_ok=True) # Ensure directory exists
+    Path(storage_path).mkdir(parents=True, exist_ok=True)
     
-    total_timesteps_to_train = 300_000 # A smaller value for quicker testing
+    # Adjust total_timesteps_to_train for testing vs. full run
+    # total_timesteps_to_train = ep_length * 100 # A larger number for a longer run
+    total_timesteps_to_train = 300_000 # For initial testing
 
     print(f"Main Script: Launching PPO training. Storing results in: {storage_path}")
+    print(f"Main Script: PPO Configuration: {full_ppo_config_dict}")
 
-    # Run the training directly in this script
+
     results_analysis = tune.run(
         "PPO",
-        name="PPO_DoubleDragon_KubeRay_Minimal", # Experiment name
+        name="PPO_DoubleDragon_KubeRay_Minimal", 
         stop={"timesteps_total": total_timesteps_to_train},
-        checkpoint_freq=20,
+        checkpoint_freq=20, # Save checkpoint every 20 training iterations
         checkpoint_at_end=True,
         storage_path=storage_path,
         config=full_ppo_config_dict,
-        # verbose=1, # Adjust verbosity as needed
+        # verbose=1, # Tune verbosity: 0 (silent), 1 (table), 2 (trial detail), 3 (debug)
     )
 
     print("Main Script: Training completed.")
@@ -122,10 +140,10 @@ def main():
                 best_trial, metric="episode_reward_mean", mode="max"
             )
             if best_checkpoint_obj:
-                best_checkpoint_path_str = str(best_checkpoint_obj) # Handles path string or Checkpoint object
+                best_checkpoint_path_str = str(best_checkpoint_obj) 
                 print(f"Main Script: Best checkpoint found at: {best_checkpoint_path_str}")
     else:
-        print("Main Script: Tune run did not return a valid ExperimentAnalysis object.")
+        print("Main Script: Tune run did not return a valid ExperimentAnalysis object or no trials were run.")
 
     print("Main Script: run-ray-dd.py finished.")
 
