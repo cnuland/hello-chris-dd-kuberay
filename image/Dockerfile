@@ -57,6 +57,10 @@ ENV NV_LIBNCCL_VERSION=2.17.1
 ENV NCCL_VERSION=2.17.1
 ENV NV_LIBNCCL_PACKAGE=${NV_LIBNCCL_PACKAGE_NAME}-${NV_LIBNCCL_PACKAGE_VERSION}+cuda12.1
 
+RUN dnf install -y mesa-libGL && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf/*
+
 RUN yum install -y \
     cuda-libraries-12-1-${NV_CUDA_LIB_VERSION} \
     cuda-nvtx-12-1-${NV_NVTX_VERSION} \
