@@ -34,7 +34,7 @@ RUN echo "/usr/local/nvidia/lib" >> /etc/ld.so.conf.d/nvidia.conf && \
     echo "/usr/local/nvidia/lib64" >> /etc/ld.so.conf.d/nvidia.conf
 
 ENV PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
-ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 ENV XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda
 
@@ -85,14 +85,18 @@ RUN yum install -y \
     ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
     && yum clean all && rm -rf /var/cache/yum/*
 
-# Copy and install cuDNN 8.5.0.96 (RHEL8 RPM)
-COPY image/cudnn-local-repo-rhel8-8.5.0.96-1.0-1.x86_64.rpm /tmp/
+ENV NV_CUDNN_VERSION=9.10.1.4-1
+ENV NV_CUDNN_PACKAGE=libcudnn9-cuda-11
+ENV NV_CUDNN_PACKAGE_DEV=libcudnn9-devel-cuda-11
 
-RUN rpm -i /tmp/cudnn-local-repo-rhel8-8.5.0.96-1.0-1.x86_64.rpm && \
-    cp /var/cudnn-local-repo-rhel8-8.5.0.96/cudnn-*-keyring.gpg /etc/pki/rpm-gpg/ && \
-    yum clean all && \
-    yum -y install libcudnn8 libcudnn8-devel && \
-    yum clean all && rm -rf /var/cache/yum /tmp/cudnn-local-repo-rhel8-8.5.0.96-1.0-1.x86_64.rpm /var/cudnn-local-repo-rhel8-8.5.0.96
+LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
+
+RUN curl -L -o cudnn.tgz https://developer.download.nvidia.com/compute/redist/cudnn/v8.5.0/cudnn-linux-x86_64-8.5.0.96_cuda11-archive.tar.xz && \
+    tar -xf cudnn.tgz && \
+    cp cudnn-linux-x86_64-8.5.0.96_cuda11-archive/include/* /usr/local/cuda/include/ && \
+    cp cudnn-linux-x86_64-8.5.0.96_cuda11-archive/lib/* /usr/local/cuda/lib64/ && \
+    chmod a+r /usr/local/cuda/include/* /usr/local/cuda/lib64/* && \
+    rm -rf cudnn.tgz cudnn-linux*
 
 # === FFmpeg (static build) ===
 RUN curl -L -o /tmp/ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
