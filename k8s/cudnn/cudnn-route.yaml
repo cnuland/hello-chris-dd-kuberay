@@ -1,0 +1,12 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: cudnn-nginx-route
+spec:
+  to:
+    kind: Service
+    name: cudnn-nginx-svc
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge

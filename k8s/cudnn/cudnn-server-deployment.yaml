@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cudnn-server
+  namespace: cudnn-host
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cudnn-server
+  template:
+    metadata:
+      labels:
+        app: cudnn-server
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - mountPath: /usr/share/nginx/html
+          name: cudnn-storage
+        - mountPath: /var/cache/nginx
+          name: nginx-cache
+        - mountPath: /etc/nginx/nginx.conf
+          name: nginx-config
+          subPath: nginx.conf
+      volumes:
+      - name: cudnn-storage
+        persistentVolumeClaim:
+          claimName: cudnn-pvc
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-config
+        configMap:
+          name: nginx-config

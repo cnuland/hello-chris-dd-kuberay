@@ -1,0 +1,123 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+# Core AI + RL
+ray = "==2.44.0"
+gymnasium = "==0.28.1"
+stable-baselines3 = "~=2.0.0"
+torch = ">=2.2.0,<2.7.0"
+jax = "~=0.4.19"
+jaxlib = "~=0.4.19"
+ml-dtypes = "*"
+einops = "*"
+
+# Git dependency (keep pinned)
+mediapy = {git = "https://github.com/PWhiddy/mediapy.git", ref = "45101800d4f6adeffe814cad93de1db67c1bd614"}
+
+# OpenCV + Visualization
+opencv-python-headless = "*"
+imageio = "*"
+matplotlib = "*"
+seaborn = "*"
+
+# Data and math
+numpy = "*"
+scipy = "*"
+pandas = "*"
+scikit-learn = "*"
+sympy = "*"
+
+# File and serialization
+fsspec = "*"
+msgpack = "*"
+pyarrow = "*"
+PyYAML = "*"
+lz4 = "*"
+hnswlib = "*"
+ormsgpack = "*"
+
+# RL & Emulator Tools
+pyboy = "*"
+PySDL2 = "*"
+pysdl2-dll = "*"
+
+# Logging, experiment tracking
+wandb = "*"
+tensorboard = "*"
+tensorboardX = "*"
+
+# Web + auth
+requests = "*"
+urllib3 = "*"
+certifi = "*"
+charset-normalizer = "*"
+idna = "*"
+oauthlib = "*"
+requests-oauthlib = "*"
+google-auth = "*"
+google-auth-oauthlib = "*"
+
+# Terminal + debugging
+tqdm = "*"
+rich = "*"
+ipython = "*"
+Pygments = "*"
+prompt-toolkit = "*"
+ptyprocess = "*"
+
+# Misc tools/utilities
+filelock = "*"
+packaging = "*"
+python-dateutil = "*"
+psutil = "*"
+setproctitle = "*"
+typer = "*"
+typing_extensions = "*"
+threadpoolctl = "*"
+joblib = "*"
+cloudpickle = "*"
+decorator = "*"
+
+# Dev tools
+GitPython = "*"
+gitdb = "*"
+
+# Jupyter + notebooks
+jupyter_client = "*"
+jupyter_core = "*"
+nbformat = "*"
+nbclient = "*"
+nbconvert = "*"
+jsonschema = "*"
+jsonschema-specifications = "*"
+traitlets = "*"
+jedi = "*"
+executing = "*"
+stack-data = "*"
+
+# HTML rendering (for Jupyter)
+beautifulsoup4 = "*"
+bleach = "*"
+soupsieve = "*"
+markdown = "*"
+mistune = "*"
+markdown-it-py = "*"
+mdurl = "*"
+webencodings = "*"
+tinycss2 = "*"
+defusedxml = "*"
+pandocfilters = "*"
+jupyterlab-pygments = "*"
+
+# Optional (can remove if not needed)
+shellingham = "*"
+platformdirs = "*"
+lazy_loader = "*"
+six = "*"
+wrapt = "*"
+
+[requires]
+python_version = "3.11"

@@ -1,0 +1,18 @@
+# upload-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: upload-pod
+spec:
+  containers:
+    - name: uploader
+      image: registry.access.redhat.com/ubi9/ubi
+      command: ["sleep", "3600"]
+      volumeMounts:
+        - mountPath: /mnt/cudnn
+          name: cudnn-vol
+  volumes:
+    - name: cudnn-vol
+      persistentVolumeClaim:
+        claimName: cudnn-pvc
+  restartPolicy: Never
