@@ -85,13 +85,12 @@ RUN yum install -y \
     ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
     && yum clean all && rm -rf /var/cache/yum/*
 
-# === cuDNN 8.5 manual install ===
-RUN curl -L -o cudnn.tgz https://developer.download.nvidia.com/compute/redist/cudnn/v8.5.0/cudnn-linux-x86_64-8.5.0.96_cuda11-archive.tar.xz && \
-    tar -xf cudnn.tgz && \
+RUN curl -L -o cudnn.tar.xz https://developer.download.nvidia.com/compute/redist/cudnn/v8.5.0/cudnn-linux-x86_64-8.5.0.96_cuda11-archive.tar.xz && \
+    tar -xf cudnn.tar.xz && \
     cp cudnn-linux-x86_64-8.5.0.96_cuda11-archive/include/* /usr/local/cuda/include/ && \
     cp cudnn-linux-x86_64-8.5.0.96_cuda11-archive/lib/* /usr/local/cuda/lib64/ && \
     chmod a+r /usr/local/cuda/include/* /usr/local/cuda/lib64/* && \
-    rm -rf cudnn.tgz cudnn-linux*
+    rm -rf cudnn.tar.xz cudnn-linux*
 
 # === FFmpeg (static build) ===
 RUN curl -L -o /tmp/ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz && \
