@@ -85,10 +85,10 @@ RUN yum install -y \
     ${NV_CUDA_NSIGHT_COMPUTE_DEV_PACKAGE} \
     && yum clean all && rm -rf /var/cache/yum/*
 
-# === cuDNN ===
-ENV NV_CUDNN_VERSION=8.5.0.96
-ENV NV_CUDNN_PACKAGE=libcudnn8-${NV_CUDNN_VERSION}.cuda11.7
-ENV NV_CUDNN_PACKAGE_DEV=libcudnn8-devel-${NV_CUDNN_VERSION}.cuda11.7
+ENV NV_CUDNN_VERSION=9.10.1.4-1
+ENV NV_CUDNN_PACKAGE=libcudnn9-cuda-11
+ENV NV_CUDNN_PACKAGE_DEV=libcudnn9-devel-cuda-11
+
 LABEL com.nvidia.cudnn.version="${NV_CUDNN_VERSION}"
 
 RUN yum install -y \
