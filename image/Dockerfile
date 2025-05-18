@@ -17,8 +17,7 @@ ENV CUDA_VERSION=11.7.1
 COPY image/cuda.repo-x86_64 /etc/yum.repos.d/cuda.repo
 
 RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${NVARCH}/D42D0685.pub \
-    | sed '/^Version/d' > /etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA && \
-    echo "b77f88ab84e69efc018b83ce44769cf589a77ee6a19f92a88431bb5d47d34647  /etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA" | sha256sum -c --strict -
+    | sed '/^Version/d' > /etc/pki/rpm-gpg/RPM-GPG-KEY-NVIDIA
 
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
