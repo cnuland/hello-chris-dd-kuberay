@@ -50,8 +50,8 @@ config = (
     .environment(env="dd_env", env_config=env_config)  # Correct env name here
     .framework("torch")
     .rollouts(
-        num_rollout_workers=2,
-        num_envs_per_worker=2,
+        num_rollout_workers=3,
+        num_envs_per_worker=3,
 
         )
     .training(model={
@@ -63,7 +63,7 @@ config = (
 tune.run(
     "PPO",
     name="PPO_DoubleDragon",
-    stop={"timesteps_total": ep_length * 100000},
+    stop={"timesteps_total": ep_length * 10000},
     checkpoint_freq=10,
     storage_path=str(Path("~/ray_results/dd").expanduser()),  # Correct usage of storage_path
     config=config.to_dict()
