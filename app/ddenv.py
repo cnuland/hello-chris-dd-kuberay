@@ -32,7 +32,7 @@ class DDEnv(Env):
             'action_freq': 8, 'init_state': 'ignored/dd.gb.state',
             'max_steps': 2048 * 30, # Adjusted for typical episode length
             'print_rewards': True,
-            'save_video': False, 'fast_video': False, # S3 saving will be controlled by save_video
+            'save_video': True, 'fast_video': True, # S3 saving will be controlled by save_video
             # 'session_path': Path(f'session_{str(uuid.uuid4())[:8]}'), # Local session_path less relevant if uploading to S3
             'gb_path': 'ignored/dd.gb', 'debug': False,
             'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True,
@@ -61,8 +61,8 @@ class DDEnv(Env):
         self.act_freq = int(config['action_freq'])
         self.max_steps = int(config['max_steps'])
         self.early_stopping = config['early_stop'] 
-        self.save_video = config['save_video']
-        self.fast_video = config['fast_video']
+        self.save_video = True
+        self.fast_video = True
         self.use_screen_explore = config['use_screen_explore']
         
         self.frame_stacks = 3
@@ -109,7 +109,11 @@ class DDEnv(Env):
         self.s3_client = None
         self.s3_bucket_name = config.get('s3_bucket_name')
         self.s3_video_prefix = config.get('s3_video_prefix', 'ddenv_videos/')
+        print("BUCKETS")
+        print(self.s3_bucket_name)
+        print(self.save_video)
         if self.save_video and self.s3_bucket_name:
+            print("GOT HERE lets try to start S3")
             try:
                 s3_params = {
                     'aws_access_key_id': config.get('s3_access_key_id'),
@@ -247,6 +251,8 @@ class DDEnv(Env):
         
         self.step_count += 1
         terminated, truncated = self._check_episode_end()
+        if (terminated or truncated) == True:
+            print("OHSHIT")
         
         if self.save_video and self.full_frame_writer is not None:
             if not self.fast_video or terminated or truncated: 
@@ -272,8 +278,10 @@ class DDEnv(Env):
                 except: pass
                 self.current_video_temp_file = None
 
-        if self.print_rewards and (terminated or truncated or self.step_count % 500 == 0):
-            print(f"DDEnv (Instance: {self.instance_id}, Session: {self.session}, Reset: {self.reset_count-1}), Step: {self.step_count}, Action: {action}, Reward: {reward:.4f}, Term: {terminated}, Trunc: {truncated}, Lives: {self.last_lives}, Score: {self.last_score}")
+        # --- MODIFIED PRINT FREQUENCY ---
+        if self.step_count % 100 == 0:
+            print(f"UPDATE (Instance: {self.instance_id}, Session: {self.session}, Reset: {self.reset_count-1}), Step: {self.step_count}, Action: {action}, Reward: {reward:.4f}, Term: {terminated}, Trunc: {truncated}, Lives: {self.last_lives}, Score: {self.last_score}")
+        # --- END MODIFIED PRINT FREQUENCY ---
 
         info = self._get_info()
         return obs, float(reward), terminated, truncated, info
@@ -464,7 +472,8 @@ class DDEnv(Env):
 
     def close(self):
         print(f"DDEnv Closing: Instance {self.instance_id}, Session {self.session}")
-        print(f"DDEnv Final Stats: Score = {self.last_score}, Unique Levels Completed = {self.unique_levels_completed_in_episode}")
+        # Print final score and levels completed at the end of the episode/env lifetime
+        print(f"DDEnv Final Stats: Score = {self.last_score}, Unique Levels Completed in Episode = {self.unique_levels_completed_in_episode}")
 
         if self.full_frame_writer is not None:
             temp_video_path_to_upload = None
