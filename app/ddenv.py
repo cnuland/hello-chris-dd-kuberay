@@ -30,14 +30,16 @@ class DDEnv(Env):
         default_config = {
             'headless': True, 'save_final_state': False, 'early_stop': False,
             'action_freq': 8, 
-            'init_state_dir': 'ignored/', # Directory containing .state files
-            'available_init_states': [ # List of state filenames to randomly choose from
+            # NEW: Directory containing .state files
+            'init_state_dir': 'ignored/', 
+            # NEW: List of .state filenames within init_state_dir
+            'available_init_states': [ 
                 'boss.dd.gb.state', 'lvl2-dd.gb.state', 'lvl3.5-dd.gb.state',
                 'dd.gb.state', 'lvl-1.5.dd.gb.state', 'lvl3-dd.gb.state'
             ],
-            'max_steps': 2048 * 30, 
+            'max_steps': 2048 * 6, # Max steps per episode, adjust as needed
             'print_rewards': True,
-            'save_video': False, 
+            'save_video': True, 
             'fast_video': True, 
             'gb_path': 'ignored/dd.gb', 'debug': False,
             'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True,
@@ -55,28 +57,40 @@ class DDEnv(Env):
             config.setdefault(key, val)
 
         self.debug = config['debug']
-        self.gb_path = Path(config['gb_path']) 
+        self.gb_path_orig = Path(config['gb_path']) # Keep original for resolution
         self.save_final_state = config['save_final_state']
         self.print_rewards = config['print_rewards']
         self.headless = config['headless']
         
-        self.init_state_dir = Path(config['init_state_dir'])
+        self.init_state_dir_orig = Path(config['init_state_dir']) # Keep original for resolution
         self.available_state_filenames = list(config['available_init_states'])
         if not self.available_state_filenames:
             raise ValueError("Configuration 'available_init_states' must not be empty.")
         
-        # Attempt to resolve the init_state_dir relative to common locations
-        resolved_dir = self._resolve_path_robustly(self.init_state_dir, is_dir=True)
-        if resolved_dir is None or not resolved_dir.is_dir():
-            raise FileNotFoundError(f"Initial state directory not found: {self.init_state_dir}")
-        self.init_state_dir = resolved_dir
+        # Resolve paths robustly
+        self.gb_path = self._resolve_path_robustly(self.gb_path_orig, is_dir=False)
+        if self.gb_path is None or not self.gb_path.is_file():
+            raise FileNotFoundError(f"GB ROM not found. Tried: {self.gb_path_orig}")
+        
+        self.init_state_dir = self._resolve_path_robustly(self.init_state_dir_orig, is_dir=True)
+        if self.init_state_dir is None or not self.init_state_dir.is_dir():
+            raise FileNotFoundError(f"Initial state directory not found. Tried: {self.init_state_dir_orig}")
 
-        self.init_state_paths = [self.init_state_dir / fname for fname in self.available_state_filenames]
-        # Filter out paths that don't actually exist
-        self.init_state_paths = [p for p in self.init_state_paths if p.is_file()]
+        self.init_state_paths: List[Path] = []
+        for fname in self.available_state_filenames:
+            state_path = self.init_state_dir / fname
+            if state_path.is_file():
+                self.init_state_paths.append(state_path)
+            else:
+                print(f"DDEnv Warning: Specified initial state file not found: {state_path}")
+        
         if not self.init_state_paths:
-            raise FileNotFoundError(f"No valid state files found in {self.init_state_dir} from the list: {self.available_state_filenames}")
-        print(f"DDEnv: Found {len(self.init_state_paths)} valid initial state files.")
+            raise FileNotFoundError(
+                f"No valid state files found in resolved directory '{self.init_state_dir}' "
+                f"from the list: {self.available_state_filenames}. "
+                f"Ensure these files exist in the 'ignored/' folder within your Ray job's working_dir."
+            )
+        print(f"DDEnv: Found {len(self.init_state_paths)} valid initial state files in {self.init_state_dir}.")
 
 
         self.act_freq = int(config['action_freq'])
@@ -150,11 +164,6 @@ class DDEnv(Env):
                 self.s3_client = None 
         elif (self.save_video or self.save_final_state) and not self.s3_bucket_name:
             print("DDEnv Warning: S3 saving enabled but `s3_bucket_name` not configured. S3 features disabled.")
-
-        resolved_gb_path = self._resolve_path_robustly(self.gb_path, is_dir=False)
-        if resolved_gb_path is None or not resolved_gb_path.is_file():
-            raise FileNotFoundError(f"GB ROM not found: {self.gb_path}")
-        self.gb_path = resolved_gb_path
         
         window = 'headless' if self.headless else 'SDL2'
         self.pyboy = PyBoy(str(self.gb_path), debugging=self.debug, disable_input=False, window_type=window)
@@ -170,41 +179,49 @@ class DDEnv(Env):
         self.previous_total_game_state_reward = 0.0
         self.unique_levels_completed_in_episode = 0 
 
-    def _resolve_path_robustly(self, relative_path: Path, is_dir: bool = False) -> Optional[Path]:
+    def _resolve_path_robustly(self, relative_path_str: str, is_dir: bool = False) -> Optional[Path]:
         """Tries to resolve a path relative to common locations."""
-        # 1. Try as absolute or already correct relative path
-        if relative_path.exists() and (not is_dir or relative_path.is_dir()):
-            return relative_path.resolve()
+        relative_path = Path(relative_path_str) # Ensure it's a Path object
+
+        # 1. Try as absolute or already correct relative path from CWD
+        path_from_cwd = (Path.cwd() / relative_path).resolve()
+        if path_from_cwd.exists() and (not is_dir or path_from_cwd.is_dir()):
+            # print(f"DDEnv Path Debug: Resolved {relative_path} via CWD to {path_from_cwd}")
+            return path_from_cwd
         
         # 2. Try relative to the script's directory (if __file__ is defined)
         try:
-            script_dir = Path(__file__).parent.resolve()
+            # Resolve __file__ to an absolute path in case it's relative itself
+            script_file_path = Path(__file__).resolve()
+            script_dir = script_file_path.parent
             path_from_script = (script_dir / relative_path).resolve()
             if path_from_script.exists() and (not is_dir or path_from_script.is_dir()):
+                # print(f"DDEnv Path Debug: Resolved {relative_path} via script dir to {path_from_script}")
                 return path_from_script
-        except NameError: # __file__ might not be defined
+        except NameError: # __file__ might not be defined (e.g. in some interactive sessions)
+            # print(f"DDEnv Path Debug: __file__ not defined, cannot resolve {relative_path} via script dir.")
             pass 
             
-        # 3. Try relative to current working directory
-        path_from_cwd = (Path.cwd() / relative_path).resolve()
-        if path_from_cwd.exists() and (not is_dir or path_from_cwd.is_dir()):
-            return path_from_cwd
-            
+        # 3. If it's already an absolute path and exists
+        if relative_path.is_absolute() and relative_path.exists() and \
+           (not is_dir or relative_path.is_dir()):
+            # print(f"DDEnv Path Debug: Resolved {relative_path} as absolute path.")
+            return relative_path
+
+        print(f"DDEnv Path Warning: Could not resolve path {relative_path}. Tried CWD ({Path.cwd()}) and script dir.")
         return None
 
 
     def _get_initial_game_state(self):
-        if not self.init_state_paths: # Should have been caught in __init__ but as a safeguard
-            raise RuntimeError("No valid initial state files available to load.")
+        if not self.init_state_paths: 
+            raise RuntimeError("DDEnv Error: No valid initial state files available to load. Check 'init_state_dir' and 'available_init_states' config and file locations.")
             
-        # Randomly select a state file from the valid list
         selected_state_file_path = random.choice(self.init_state_paths)
         
-        print(f"DDEnv (Instance: {self.instance_id}): Loading initial state from: {selected_state_file_path.name}")
+        print(f"DDEnv (Instance: {self.instance_id}): Loading initial state from: {selected_state_file_path.name} (full path: {selected_state_file_path})")
         
         if not selected_state_file_path.is_file(): 
-            # This should ideally not happen if self.init_state_paths was filtered correctly
-            raise FileNotFoundError(f"Selected initial game state file not found or not a file: {selected_state_file_path}")
+            raise FileNotFoundError(f"DDEnv Error: Selected initial game state file not found or not a file: {selected_state_file_path}")
         
         with open(selected_state_file_path, "rb") as f:
             self.pyboy.load_state(f)
@@ -212,10 +229,10 @@ class DDEnv(Env):
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
         super().reset(seed=seed)
         if seed is not None:
-            random.seed(seed) # Seed Python's random for choosing state file
+            random.seed(seed) 
             np.random.seed(seed)
 
-        self._get_initial_game_state() # This now loads a random state
+        self._get_initial_game_state() 
         self.session = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4))
         
         if self.full_frame_writer is not None:
@@ -226,7 +243,7 @@ class DDEnv(Env):
             try: 
                 if not self.current_video_temp_file.closed:
                     self.current_video_temp_file.close() 
-                if Path(self.current_video_temp_file.name).exists():
+                if Path(self.current_video_temp_file.name).exists(): # delete=False was used
                     os.remove(self.current_video_temp_file.name)
             except Exception as e: print(f"DDEnv Warning: Error closing/deleting previous temp video file: {e}")
             self.current_video_temp_file = None
@@ -246,7 +263,7 @@ class DDEnv(Env):
                 if self.current_video_temp_file:
                     if not self.current_video_temp_file.closed:
                          self.current_video_temp_file.close()
-                    if Path(self.current_video_temp_file.name).exists():
+                    if Path(self.current_video_temp_file.name).exists(): # delete=False was used
                         os.remove(self.current_video_temp_file.name)
                     self.current_video_temp_file = None
 
@@ -425,7 +442,7 @@ class DDEnv(Env):
         except: return getattr(self, 'last_lives', 3)
 
     def _get_current_game_state_potentials(self) -> Dict[str, float]:
-        score_potential = self._get_current_score() * 0.01 
+        score_potential = self._get_current_score() * 0.05 
         level_val = self._get_current_level()
         level_reward_map = {15: 0, 84: 500, 48: 600, 89: 700, 11: 800} 
         level_potential = float(level_reward_map.get(level_val, self.last_level * 10))
@@ -438,7 +455,7 @@ class DDEnv(Env):
         level_reward = 0.0 
         current_level_val = self._get_current_level()
         if current_level_val != self.last_level: 
-             level_reward_map_direct = {15: 0, 84: 50, 48: 60, 89: 70, 11: 80} 
+             level_reward_map_direct = {15: 0, 84: 100, 48: 150, 89: 200, 11: 250} 
              if current_level_val in level_reward_map_direct and not self.locations.get(current_level_val, False):
                  level_reward = float(level_reward_map_direct[current_level_val])
                  self.locations[current_level_val] = True 
@@ -446,7 +463,7 @@ class DDEnv(Env):
         
         lives_reward_penalty = 0.0
         if self._get_current_lives() < self.last_lives: 
-            lives_reward_penalty = -100.0 # More significant penalty
+            lives_reward_penalty = -50.0 # More significant penalty
 
         self.game_state_reward_components = current_potentials
         self.last_score = self._get_current_score()
@@ -457,7 +474,7 @@ class DDEnv(Env):
         current_x = self._get_player_x_pos()
         current_y = self._get_player_y_pos()
         if current_x != self.old_x_pos or current_y != self.old_y_pos:
-            pos_change_reward = 0.05 
+            pos_change_reward = 0.15
         self.old_x_pos = current_x
         self.old_y_pos = current_y
 
@@ -521,8 +538,8 @@ class DDEnv(Env):
         final_lives = self._get_current_lives() 
         print(f"DDEnv Final Stats: Score = {final_score}, Lives = {final_lives}, Unique Levels Completed in Episode = {self.unique_levels_completed_in_episode}")
 
-        if self.save_video and self.full_frame_writer is not None : # Check if writer exists
-            if not getattr(self.full_frame_writer, 'closed', True): # Check if not closed (mediapy might not have .closed)
+        if self.save_video and self.full_frame_writer is not None : 
+            if not getattr(self.full_frame_writer, 'closed', True): 
                 try:
                     self.full_frame_writer.add_image(self.screen.screen_ndarray()) 
                     print("DDEnv Info: Added final frame to video before closing.")
@@ -551,13 +568,10 @@ class DDEnv(Env):
                 self.current_video_temp_file = None
         
         if self.save_final_state and hasattr(self, 'pyboy') and self.pyboy is not None:
-            state_temp_file_path = None # Store path for cleanup
+            state_temp_file_path = None 
             try:
-                # Use a NamedTemporaryFile to get a path for PyBoy to save to.
-                # PyBoy's save_state needs a file-like object opened in 'wb' mode.
                 with tempfile.NamedTemporaryFile(suffix=".state", delete=False) as state_fp_obj:
                     state_temp_file_path = state_fp_obj.name
-                    # PyBoy's save_state method expects a file object, not a path.
                     self.pyboy.save_state(state_fp_obj) 
                 
                 print(f"DDEnv Info: Final game state saved to temporary file: {state_temp_file_path}")
@@ -565,19 +579,17 @@ class DDEnv(Env):
                 if self.s3_client and self.s3_bucket_name and state_temp_file_path:
                     s3_state_key = f"{self.s3_state_prefix.strip('/')}/final_state_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}.state"
                     self._upload_file_to_s3(state_temp_file_path, s3_state_key, content_type='application/octet-stream')
-                elif not self.s3_client and Path(state_temp_file_path).exists(): # Fallback to local save if S3 not configured
+                elif not self.s3_client and Path(state_temp_file_path).exists(): 
                     local_state_dir = Path.cwd() / "ddenv_final_states"
                     local_state_dir.mkdir(parents=True, exist_ok=True)
                     local_state_path = local_state_dir / f"final_state_{self.instance_id}_reset{self.reset_count-1}.state"
                     Path(state_temp_file_path).rename(local_state_path)
                     print(f"DDEnv Info: S3 not configured. Final game state saved locally to: {local_state_path}")
-                    # If renamed, no need to os.remove state_temp_file_path later
                     state_temp_file_path = None 
 
             except Exception as e:
                 print(f"DDEnv Warning: Failed to save final game state. Error: {e}")
             finally:
-                # Ensure temp file is removed if it still exists and wasn't uploaded/moved
                 if state_temp_file_path and Path(state_temp_file_path).exists():
                     try: os.remove(state_temp_file_path)
                     except: pass

@@ -1,6 +1,6 @@
 # run-ray-dd.py
 import ray
-from ray.rllib.algorithms.ppo import PPOConfig # Import PPOConfig
+from ray.rllib.algorithms.ppo import PPOConfig
 from ray import tune
 from ray.rllib.models import ModelCatalog
 from ray.tune.registry import register_env
@@ -10,7 +10,9 @@ import os
 import torch
 
 # Import your custom modules directly.
-from ddenv import DDEnv # Assuming this is the Gymnasium 1.0.0 compatible version from ddenv_s3_gymnasium_1_0
+# These files (ddenv.py, custom_cnn_model.py) and the 'ignored/' directory
+# must be in the working_dir of the Ray job.
+from ddenv import DDEnv 
 from custom_cnn_model import CustomCNNModel
 
 warnings.filterwarnings("ignore", category=UserWarning, module="gymnasium")
@@ -21,6 +23,8 @@ def main():
     Main function to initialize Ray, configure, and run PPO training.
     """
     # --- Read custom S3 Env Vars and set standard AWS Env Vars for boto3/fsspec ---
+    # This helps boto3 (used by Ray Tune and DDEnv) to automatically pick up credentials
+    # and endpoint configurations if you are using S3_... prefixed env vars.
     s3_bucket_name_custom = os.environ.get('S3_BUCKET_NAME')
     s3_endpoint_url_custom = os.environ.get('S3_ENDPOINT_URL')
     s3_access_key_id_custom = os.environ.get('S3_ACCESS_KEY_ID')
@@ -65,44 +69,67 @@ def main():
 
     if not ray.is_initialized():
         print("Main Script: Initializing Ray...")
-        ray.init(address='auto') 
+        ray.init(address='auto') # Connects to the KubeRay cluster
 
-    print(f"Main Script: Ray version: {ray.__version__}")
+    print(f"Main Script: Ray version: {ray.__version__}") # Should be 2.44.0
     print(f"Main Script: Ray cluster resources: {ray.cluster_resources()}")
 
+    # --- Register custom components ---
     ModelCatalog.register_custom_model("custom_cnn", CustomCNNModel)
     print("Main Script: Custom model 'custom_cnn' registered.")
     
     register_env("dd_env", lambda cfg_passed_by_rllib: DDEnv(cfg_passed_by_rllib))
     print("Main Script: Custom environment 'dd_env' registered.")
+    # --- End Registrations ---
 
-    s3_bucket_name = s3_bucket_name_custom 
+    # --- Storage Path Configuration for Ray Tune ---
+    # Use the S3 bucket name read at the start (which might be None)
+    s3_bucket_name_for_tune = s3_bucket_name_custom 
 
-    if s3_bucket_name:
-        s3_tune_results_prefix = "ray_tune_results/dd_ppo_experiment" 
-        storage_path = f"s3://{s3_bucket_name}/{s3_tune_results_prefix}"
+    if s3_bucket_name_for_tune:
+        s3_tune_results_prefix = "ray_tune_results/dd_ppo_experiment_final" # Unique prefix for this experiment
+        storage_path = f"s3://{s3_bucket_name_for_tune}/{s3_tune_results_prefix}"
         print(f"Main Script: Using S3 storage path for Ray Tune: {storage_path}")
         if s3_endpoint_url_custom: 
             print(f"Main Script: S3 endpoint URL for Tune: {s3_endpoint_url_custom}")
     else:
         print("Main Script: S3_BUCKET_NAME not set. Using local storage path for Ray Tune.")
-        storage_path = str(Path("~/ray_results_kuberay/dd_ppo_minimal_corrected").expanduser())
+        storage_path = str(Path("~/ray_results_kuberay/dd_ppo_final").expanduser())
         Path(storage_path).mkdir(parents=True, exist_ok=True)
+    # --- End Storage Path Configuration ---
     
-    ep_length = 2048 * 15 
+    # --- Environment and PPO Configuration ---
+    # Max steps per episode in DDEnv
+    max_episode_steps = 2048 * 10 # Example: Reduced for potentially faster episode turnover with random starts
+                                  # Adjust as needed. Original was 2048 * 30.
+
     base_env_config = { 
-        'headless': True, 'save_final_state': True, 'early_stop': False,
-        'action_freq': 8, 'init_state': 'ignored/dd.gb.state', 'max_steps': ep_length,
-        'print_rewards': False, 
-        'save_video': True, 
-        'fast_video': True,
-        'gb_path': 'ignored/dd.gb', 'debug': False,
-        'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True, 'extra_buttons': False,
+        'headless': True, 
+        'save_final_state': True, # DDEnv will attempt to save state to S3 if configured
+        'early_stop': False,
+        'action_freq': 8, 
+        'init_state_dir': 'ignored/', # Directory where .state files are located
+        'available_init_states': [    # List of .state files to randomly choose from
+            'boss.dd.gb.state', 'lvl2-dd.gb.state', 'lvl3.5-dd.gb.state',
+            'dd.gb.state', 'lvl-1.5.dd.gb.state', 'lvl3-dd.gb.state'
+        ],
+        'max_steps': max_episode_steps, 
+        'print_rewards': False, # DDEnv has its own print logic, RLlib also logs rewards
+        'save_video': True,    # Enable video saving in DDEnv (will go to S3 if configured)
+        'fast_video': True,    # DDEnv's frame saving logic was updated to save every step if save_video is True
+        'gb_path': 'ignored/dd.gb', 
+        'debug': False,
+        'sim_frame_dist': 2_000_000.0, 
+        'use_screen_explore': True, 
+        'extra_buttons': False,
+        # Pass S3 config to DDEnv instances using the initially read custom vars
         's3_bucket_name': s3_bucket_name_custom,
         's3_endpoint_url': s3_endpoint_url_custom,
         's3_access_key_id': s3_access_key_id_custom,
         's3_secret_access_key': s3_secret_access_key_custom,
         's3_region_name': s3_region_name_custom,
+        's3_video_prefix': 'ddenv_videos/ppo_final/', # More specific prefix for videos from this run
+        's3_state_prefix': 'ddenv_states/ppo_final/'  # More specific prefix for states from this run
     }
 
     num_rollout_workers = 3 
@@ -112,21 +139,26 @@ def main():
     print(f"Main Script: Detected GPUs in Ray cluster: {detected_gpus_in_cluster}")
     print(f"Main Script: Requesting {ppo_learner_num_gpus} GPU(s) for the PPO learner.")
 
+    # Total timesteps for the entire training run
+    total_training_timesteps = 300_000 # For initial testing; increase for a full run
+
+    # Learning Rate Schedule
+    initial_lr = 5e-5
+    final_lr = 1e-6 
+    lr_schedule = [
+        [0, initial_lr],
+        [total_training_timesteps, final_lr]
+    ]
+    print(f"Main Script: Using learning rate schedule: {lr_schedule}")
+
     ppo_algo_config = PPOConfig()
     ppo_algo_config.sgd_minibatch_size = 500
     ppo_algo_config.num_sgd_iter = 10
-
-    # --- Learning Rate Schedule ---
-    initial_lr = 5e-5
-    final_lr = 1e-6 # Example final learning rate
-    total_timesteps_to_train = 300_0000 # Ensure this matches the `stop` condition for tune.run
-
-    lr_schedule = [
-        [0, initial_lr],  # At timestep 0, lr is initial_lr
-        [total_timesteps_to_train, final_lr]  # At final timestep, lr is final_lr
-    ]
-    print(f"Main Script: Using learning rate schedule: {lr_schedule}")
-    # --- End Learning Rate Schedule ---
+    # ppo_algo_config.clip_param = 0.2
+    # ppo_algo_config.use_gae = True
+    # ppo_algo_config.lambda_ = 0.95
+    # ppo_algo_config.vf_loss_coeff = 0.5
+    # ppo_algo_config.entropy_coeff = 0.01
 
     ppo_algo_config = (
         ppo_algo_config 
@@ -140,8 +172,7 @@ def main():
         .training( 
             model={"custom_model": "custom_cnn"}, 
             gamma=0.99,
-            # lr=5e-5, # REMOVED: Replaced by lr_schedule
-            lr_schedule=lr_schedule, # ADDED: Learning rate schedule
+            lr_schedule=lr_schedule, # Using the learning rate schedule
             train_batch_size=5000 
         )
         .resources(
@@ -150,25 +181,25 @@ def main():
         .debugging(
             log_level="INFO" 
         )
-        .api_stack(
+        .api_stack( # To use ModelV2
             enable_rl_module_and_learner=False,
             enable_env_runner_and_connector_v2=False
         )
     )
     
     full_ppo_config_dict = ppo_algo_config.to_dict()
-    # total_timesteps_to_train is already defined for lr_schedule and stop condition
-
+    
     print(f"Main Script: Launching PPO training. Storing results/checkpoints in: {storage_path}")
     
     results_analysis = tune.run(
         "PPO",
-        name="PPO_DoubleDragon_KubeRay_Minimal", 
-        stop={"timesteps_total": total_timesteps_to_train}, # Ensure this matches the end of lr_schedule
+        name="PPO_DoubleDragon_KubeRay_Final", # Experiment name
+        stop={"timesteps_total": total_training_timesteps}, 
         checkpoint_freq=20, 
         checkpoint_at_end=True,
         storage_path=storage_path, 
         config=full_ppo_config_dict,
+        # verbose=1, # 0 (silent), 1 (table), 2 (trial detail), 3 (debug)
     )
 
     print("Main Script: Training completed.")
@@ -186,12 +217,15 @@ def main():
                 )
                 if best_checkpoint_obj:
                     best_checkpoint_path_str = str(best_checkpoint_obj.path if hasattr(best_checkpoint_obj, 'path') else best_checkpoint_obj)
-                    print(f"Main Script: Best checkpoint found at (S3 URI): {best_checkpoint_path_str}")
+                    print(f"Main Script: Best checkpoint found at (S3 URI or local): {best_checkpoint_path_str}")
             else:
                 print("Main Script: No best trial found (or metric not reported).")
         except Exception as e:
             print(f"Main Script: Error processing results: {e}")
-            print(f"Main Script: All trial results: {results_analysis.results}")
+            if hasattr(results_analysis, 'results'):
+                 print(f"Main Script: All trial results: {results_analysis.results}")
+            else:
+                print("Main Script: No 'results' attribute in results_analysis object.")
     else:
         print("Main Script: Tune run did not return a valid ExperimentAnalysis object or no trials were run.")
 
