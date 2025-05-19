@@ -1,303 +1,489 @@
 import random
 import string
-import sys
+# import sys # sys.path modification is generally not recommended for Ray workers
 import os
 from math import floor
 import uuid
 import numpy as np
 from einops import rearrange
-from skimage.transform import resize
+from skimage.transform import resize # Ensure scikit-image is in your Pipfile/requirements
 from pathlib import Path
-import mediapy as media
+import mediapy as media # Ensure mediapy is in your Pipfile/requirements
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
-from gymnasium import Env, spaces
-from typing import Optional
+from gymnasium import Env, spaces # Correct import for Gymnasium
+from typing import Optional, Tuple, Dict, Any
+import tempfile # For temporary video files
+import boto3 # For S3 interaction
 
-# Set up relative path
-file_path = os.path.dirname(os.path.realpath(__file__))
-sys.path.insert(0, file_path + "/../..")
-
+# Commenting out problematic sys.path modification
+# file_path = os.path.dirname(os.path.realpath(__file__))
+# sys.path.insert(0, file_path + "/../..")
 
 class DDEnv(Env):
+    metadata = {"render_modes": ["rgb_array"], "render_fps": 60}
+
     def __init__(self, config: Optional[dict] = None):
         super().__init__()
-        config = config or {}
+        config = config if config is not None else {}
+
         default_config = {
             'headless': True, 'save_final_state': False, 'early_stop': False,
             'action_freq': 8, 'init_state': 'ignored/dd.gb.state',
-            'max_steps': 2048 * 30 * 12 * 1000, 'print_rewards': True,
-            'save_video': False, 'fast_video': False,
-            'session_path': Path(f'session_{str(uuid.uuid4())[:8]}'),
+            'max_steps': 2048 * 30, # Adjusted for typical episode length
+            'print_rewards': True,
+            'save_video': False, 'fast_video': False, # S3 saving will be controlled by save_video
+            # 'session_path': Path(f'session_{str(uuid.uuid4())[:8]}'), # Local session_path less relevant if uploading to S3
             'gb_path': 'ignored/dd.gb', 'debug': False,
             'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True,
-            'extra_buttons': False
+            'extra_buttons': False,
+            # S3 specific config defaults (to be overridden by env vars or RLlib config)
+            's3_bucket_name': os.environ.get('S3_BUCKET_NAME'),
+            's3_endpoint_url': os.environ.get('S3_ENDPOINT_URL'), # For S3 compatible storage
+            's3_access_key_id': os.environ.get('S3_ACCESS_KEY_ID'),
+            's3_secret_access_key': os.environ.get('S3_SECRET_ACCESS_KEY'),
+            's3_region_name': os.environ.get('S3_REGION_NAME'),
+            's3_video_prefix': 'ddenv_videos/' # Prefix for S3 object keys
         }
         
         for key, val in default_config.items():
             config.setdefault(key, val)
 
         self.debug = config['debug']
-        self.s_path = Path(config['session_path'])
-        self.gb_path = config['gb_path']
+        # self.s_path = Path(config['session_path']) # Local session path for non-S3 things if any
+        # self.s_path.mkdir(parents=True, exist_ok=True) # Create if still used
+
+        self.gb_path = Path(config['gb_path']) 
         self.save_final_state = config['save_final_state']
         self.print_rewards = config['print_rewards']
         self.headless = config['headless']
-        self.init_state = config['init_state']
-        self.act_freq = config['action_freq']
-        self.max_steps = config['max_steps']
-        self.early_stopping = config['early_stop']
+        self.init_state = Path(config['init_state'])
+        self.act_freq = int(config['action_freq'])
+        self.max_steps = int(config['max_steps'])
+        self.early_stopping = config['early_stop'] 
         self.save_video = config['save_video']
         self.fast_video = config['fast_video']
-        self.similar_frame_dist = config['sim_frame_dist']
         self.use_screen_explore = config['use_screen_explore']
+        
         self.frame_stacks = 3
-        self.downsample_factor = 2
-        self.reset_count = 0
-        self.instance_id = str(uuid.uuid4())[:8]
-        self.output_shape = (36, 40, 3)
+        self._single_frame_obs_shape = (36, 40, 3) 
+        self.recent_frames_np_shape = (self.frame_stacks, *self._single_frame_obs_shape)
+
         self.mem_padding = 2
         self.memory_height = 8
-        self.col_steps = 16
-        self.session = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4))
-
-
-        self.output_full = (
-            self.output_shape[0] * self.frame_stacks + 2 * (self.mem_padding + self.memory_height),
-            self.output_shape[1],
-            self.output_shape[2]
-        )
-
-        Path(self.s_path).mkdir(parents=True, exist_ok=True)
+        self.col_steps = 16 
+        if self.col_steps <= 0: self.col_steps = 1
 
         self.valid_actions = [
-            WindowEvent.PRESS_ARROW_DOWN,
-            WindowEvent.PRESS_ARROW_LEFT,
-            WindowEvent.PRESS_ARROW_RIGHT,
-            WindowEvent.PRESS_ARROW_UP,
-            WindowEvent.PRESS_BUTTON_A,
-            WindowEvent.PRESS_BUTTON_B,
-            97,  # jump left
-            98,  # jump right
-            99   # jump kick
+            WindowEvent.PRESS_ARROW_DOWN, WindowEvent.PRESS_ARROW_LEFT,
+            WindowEvent.PRESS_ARROW_RIGHT, WindowEvent.PRESS_ARROW_UP,
+            WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B,
+            97, 98, 99 
         ]
-
         self.release_arrow = [
-            WindowEvent.RELEASE_ARROW_DOWN,
-            WindowEvent.RELEASE_ARROW_LEFT,
-            WindowEvent.RELEASE_ARROW_RIGHT,
-            WindowEvent.RELEASE_ARROW_UP
+            WindowEvent.RELEASE_ARROW_DOWN, WindowEvent.RELEASE_ARROW_LEFT,
+            WindowEvent.RELEASE_ARROW_RIGHT, WindowEvent.RELEASE_ARROW_UP
         ]
-
         self.release_button = [
-            WindowEvent.RELEASE_BUTTON_A,
-            WindowEvent.RELEASE_BUTTON_B
+            WindowEvent.RELEASE_BUTTON_A, WindowEvent.RELEASE_BUTTON_B
         ]
-
         self.action_space = spaces.Discrete(len(self.valid_actions))
-        self.observation_space = spaces.Box(low=0, high=255, shape=self.output_full, dtype=np.uint8)
+        
+        screen_stacked_height = self.frame_stacks * self._single_frame_obs_shape[0]
+        exploration_mem_height = self.memory_height 
+        recent_mem_height = self.memory_height
+        total_height = (
+            exploration_mem_height + self.mem_padding +
+            recent_mem_height + self.mem_padding +
+            screen_stacked_height
+        )
+        final_obs_width = self._single_frame_obs_shape[1]
+        final_obs_channels = self._single_frame_obs_shape[2]
 
-        head = 'headless' if self.headless else 'SDL2'
-        self.pyboy = PyBoy(
-            self.gb_path,
-            debugging=True,
-            disable_input=False,
-            window_type=head,
-            hide_window='--quiet' in sys.argv
+        self.observation_space_shape = (total_height, final_obs_width, final_obs_channels)
+        self.observation_space = spaces.Box(
+            low=0, high=255, shape=self.observation_space_shape, dtype=np.uint8
         )
 
-        self.screen = self.pyboy.botsupport_manager().screen()
+        # S3 Client Initialization
+        self.s3_client = None
+        self.s3_bucket_name = config.get('s3_bucket_name')
+        self.s3_video_prefix = config.get('s3_video_prefix', 'ddenv_videos/')
+        if self.save_video and self.s3_bucket_name:
+            try:
+                s3_params = {
+                    'aws_access_key_id': config.get('s3_access_key_id'),
+                    'aws_secret_access_key': config.get('s3_secret_access_key'),
+                    'region_name': config.get('s3_region_name')
+                }
+                endpoint_url = config.get('s3_endpoint_url')
+                if endpoint_url:
+                    s3_params['endpoint_url'] = endpoint_url
+                
+                s3_params = {k: v for k, v in s3_params.items() if v is not None}
 
-    def reset(self, *, seed=None, options=None):
-        with open(self.init_state, "rb") as f:
-            self.pyboy.load_state(f)
+                self.s3_client = boto3.client('s3', **s3_params)
+                print(f"DDEnv: S3 client initialized for bucket '{self.s3_bucket_name}'. Endpoint: {endpoint_url if endpoint_url else 'AWS Default'}")
+            except Exception as e:
+                print(f"DDEnv Warning: Failed to initialize S3 client. Videos will not be saved to S3. Error: {e}")
+                self.s3_client = None 
+                self.save_video = False 
+        elif self.save_video and not self.s3_bucket_name:
+            print("DDEnv Warning: `save_video` is True, but `s3_bucket_name` is not configured. Videos will not be saved to S3.")
+            self.save_video = False
+
+        if not self.gb_path.exists():
+            script_dir = Path(__file__).parent.resolve()
+            potential_path = script_dir / self.gb_path
+            if potential_path.exists(): self.gb_path = potential_path
+            else:
+                potential_path_cwd = Path.cwd() / self.gb_path
+                if potential_path_cwd.exists(): self.gb_path = potential_path_cwd
+                else: raise FileNotFoundError(f"GB ROM not found at {self.gb_path}, {script_dir / self.gb_path}, or {potential_path_cwd}")
         
+        window = 'headless' if self.headless else 'SDL2'
+        self.pyboy = PyBoy(str(self.gb_path), debugging=self.debug, disable_input=False, window_type=window)
+        if window == 'headless': self.pyboy.set_emulation_speed(0)
+
+        self.screen = self.pyboy.botsupport_manager().screen()
+        self.step_count = 0
+        self.reset_count = 0
+        self.instance_id = str(uuid.uuid4())[:8] 
+        self.full_frame_writer = None
+        self.current_video_temp_file = None 
+        self.game_state_reward_components = {}
+        self.previous_total_game_state_reward = 0.0
+        self.unique_levels_completed_in_episode = 0 # Initialize level counter
+
+    def _get_initial_game_state(self):
+        resolved_init_state = self.init_state
+        if not resolved_init_state.is_file(): 
+            script_dir = Path(__file__).parent.resolve()
+            potential_path = script_dir / self.init_state
+            if potential_path.is_file(): resolved_init_state = potential_path
+            else:
+                potential_path_cwd = Path.cwd() / self.init_state
+                if potential_path_cwd.is_file(): resolved_init_state = potential_path_cwd
+                else: raise FileNotFoundError(f"Initial game state file not found or not a file: {self.init_state}, {script_dir / self.init_state}, or {potential_path_cwd}")
+        with open(resolved_init_state, "rb") as f:
+            self.pyboy.load_state(f)
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
+        super().reset(seed=seed)
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+
+        self._get_initial_game_state()
         self.session = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4))
+        
+        if self.full_frame_writer is not None:
+            try: self.full_frame_writer.close()
+            except Exception as e: print(f"DDEnv Warning: Error closing previous video writer: {e}")
+            self.full_frame_writer = None
+        if self.current_video_temp_file is not None:
+            try: self.current_video_temp_file.close() 
+            except Exception as e: print(f"DDEnv Warning: Error closing previous temp video file: {e}")
+            self.current_video_temp_file = None
 
-        if self.save_video:
-            base_dir = self.s_path / Path('rollouts')
-            base_dir.mkdir(exist_ok=True)
-            full_name = Path(f'full_reset_{self.session}_id{self.instance_id}').with_suffix('.mp4')
-            self.full_frame_writer = media.VideoWriter(base_dir / full_name, (144, 160), fps=60)
-            self.full_frame_writer.__enter__()
+        if self.save_video: 
+            try:
+                self.current_video_temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                temp_video_path = self.current_video_temp_file.name
+                
+                self.full_frame_writer = media.VideoWriter(
+                    path=temp_video_path, shape=(144, 160), fps=60
+                )
+                self.full_frame_writer.__enter__()
+            except Exception as e:
+                print(f"DDEnv Warning: Failed to start video recording. Error: {e}")
+                self.save_video = False 
+                if self.current_video_temp_file:
+                    self.current_video_temp_file.close()
+                    self.current_video_temp_file = None
 
-        self.recent_frames = np.zeros((self.frame_stacks, *self.output_shape), dtype=np.uint8)
-        self.recent_memory = np.zeros((self.output_shape[1] * self.memory_height, 3), dtype=np.uint8)
+        self.recent_frames = np.zeros(self.recent_frames_np_shape, dtype=np.uint8)
+        self.recent_memory_flat = np.zeros((self.observation_space_shape[1] * self.memory_height, self.observation_space_shape[2]), dtype=np.uint8)
 
-        self.old_x_pos = []
-        self.old_y_pos = []
         self.step_count = 0
         self.kick_penalty = False
-        self.last_score = 0
-        self.last_level = 0
-        self.last_lives = 3
-        self.total_reward = 0
-        self.total_score_rew = 0
-        self.levels = 0
-        self.total_lives_rew = 3
-        self.locations = {i: False for i in range(1, 8)}
-        self.progress_reward = self.get_game_state_reward()
+        self.last_score = self._get_current_score()
+        self.last_level = self._get_current_level()
+        self.last_lives = self._get_current_lives()
+        self.old_x_pos = self._get_player_x_pos()
+        self.old_y_pos = self._get_player_y_pos()
+        
+        self.locations = {i: False for i in range(1, 8)} 
+        self.game_state_reward_components = self._get_current_game_state_potentials()
+        self.previous_total_game_state_reward = sum(self.game_state_reward_components.values())
+        self.unique_levels_completed_in_episode = 0 # Reset level counter for new episode
+        
+        self.reset_count += 1
+        obs = self._get_observation()
+        info = self._get_info()
+        return obs, info
 
-        return self.render(), {}
+    def _upload_video_to_s3(self, local_file_path: str, s3_object_key: str):
+        if not self.s3_client or not self.s3_bucket_name:
+            print("DDEnv Warning: S3 client or bucket not configured. Cannot upload video.")
+            return
+        try:
+            print(f"DDEnv Info: Uploading video {local_file_path} to S3 bucket '{self.s3_bucket_name}' as '{s3_object_key}'...")
+            self.s3_client.upload_file(local_file_path, self.s3_bucket_name, s3_object_key)
+            print(f"DDEnv Info: Video successfully uploaded to s3://{self.s3_bucket_name}/{s3_object_key}")
+        except Exception as e:
+            print(f"DDEnv Error: Failed to upload video to S3. Error: {e}")
+        finally:
+            if Path(local_file_path).exists():
+                try:
+                    os.remove(local_file_path)
+                except Exception as e_del:
+                    print(f"DDEnv Warning: Failed to delete temporary video file {local_file_path}. Error: {e_del}")
 
-    def step(self, action):
-        self.run_action_on_emulator(action)
-        self.recent_frames = np.roll(self.recent_frames, 1, axis=0)
-        obs = self.render()
-
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, dict]:
+        self._run_action_on_emulator(action)
+        obs = self._get_observation()
+        reward = self._calculate_reward_from_potentials()
+        
         self.step_count += 1
-        reward, _ = self.update_reward()
+        terminated, truncated = self._check_episode_end()
+        
+        if self.save_video and self.full_frame_writer is not None:
+            if not self.fast_video or terminated or truncated: 
+                self.full_frame_writer.add_image(self.screen.screen_ndarray())
 
-        done = self.check_if_done()
-        if done and self.save_video:
-            self.full_frame_writer.close()
+        if (terminated or truncated) and self.save_video and self.full_frame_writer is not None:
+            temp_video_path_to_upload = None
+            if self.current_video_temp_file:
+                temp_video_path_to_upload = self.current_video_temp_file.name
+            
+            try:
+                self.full_frame_writer.close()
+            except Exception as e:
+                print(f"DDEnv Warning: Failed to close video writer: {e}")
+            self.full_frame_writer = None
+            
+            if temp_video_path_to_upload and Path(temp_video_path_to_upload).exists() and self.s3_client:
+                s3_object_key = f"{self.s3_video_prefix.strip('/')}/rollout_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}_vid{str(uuid.uuid4())[:4]}.mp4"
+                self._upload_video_to_s3(temp_video_path_to_upload, s3_object_key)
+            
+            if self.current_video_temp_file: 
+                try: self.current_video_temp_file.close()
+                except: pass
+                self.current_video_temp_file = None
 
-        return obs, reward * 0.1, False, done, {}
+        if self.print_rewards and (terminated or truncated or self.step_count % 500 == 0):
+            print(f"DDEnv (Instance: {self.instance_id}, Session: {self.session}, Reset: {self.reset_count-1}), Step: {self.step_count}, Action: {action}, Reward: {reward:.4f}, Term: {terminated}, Trunc: {truncated}, Lives: {self.last_lives}, Score: {self.last_score}")
 
-    def render(self, reduce_res=True, add_memory=True, update_mem=True):
-        frame = self.screen.screen_ndarray()
-        if reduce_res:
-            frame = (255 * resize(frame, self.output_shape)).astype(np.uint8)
-            if update_mem:
-                self.recent_frames[0] = frame
-            if add_memory:
-                pad = np.zeros((self.mem_padding, self.output_shape[1], 3), dtype=np.uint8)
-                frame = np.concatenate([
-                    self.create_exploration_memory(),
-                    pad,
-                    self.create_recent_memory(),
-                    pad,
-                    rearrange(self.recent_frames, 'f h w c -> (f h) w c')
-                ], axis=0)
-        return frame
+        info = self._get_info()
+        return obs, float(reward), terminated, truncated, info
 
-    def run_action_on_emulator(self, action):
-        act = self.valid_actions[action]
-        if act == 99:
-            self.combo_action([WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B])
-        elif act == 97:
-            self.combo_action([WindowEvent.PRESS_ARROW_LEFT, WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B])
-        elif act == 98:
-            self.combo_action([WindowEvent.PRESS_ARROW_RIGHT, WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B])
-        else:
-            self.pyboy.send_input(act)
+    def _get_observation(self) -> np.ndarray:
+        game_frame = self.screen.screen_ndarray()
+        h, w, c = self._single_frame_obs_shape
+        processed_frame = (255 * resize(game_frame, (h, w, c))).astype(np.uint8)
+
+        self.recent_frames = np.roll(self.recent_frames, shift=-1, axis=0)
+        self.recent_frames[-1] = processed_frame
+
+        exploration_mem = self._create_exploration_memory()
+        recent_mem = self._create_recent_memory()
+        pad = np.zeros((self.mem_padding, self.observation_space_shape[1], self.observation_space_shape[2]), dtype=np.uint8)
+        screen_part = rearrange(self.recent_frames, 'f h w c -> (f h) w c')
+
+        final_obs = np.concatenate([exploration_mem, pad, recent_mem, pad, screen_part], axis=0)
+        return final_obs.astype(np.uint8)
+
+    def _get_info(self) -> dict:
+        return {"score": self.last_score, "lives": self.last_lives, "level": self.last_level, "steps": self.step_count, "instance_id": self.instance_id, "session": self.session, "levels_completed": self.unique_levels_completed_in_episode}
+
+    def _check_episode_end(self) -> Tuple[bool, bool]:
+        terminated = self._get_current_lives() == 0
+        truncated = self.step_count >= self.max_steps
+        return terminated, truncated
+
+    def render(self) -> np.ndarray: 
+        return self._get_observation() 
+
+    def _run_action_on_emulator(self, action_idx: int):
+        action_to_perform = self.valid_actions[action_idx]
+        self.kick_penalty = False 
+
+        if action_to_perform >= 97: 
+            combo_map = {
+                99: [WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B], 
+                97: [WindowEvent.PRESS_ARROW_LEFT, WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B], 
+                98: [WindowEvent.PRESS_ARROW_RIGHT, WindowEvent.PRESS_BUTTON_A, WindowEvent.PRESS_BUTTON_B]
+            }
+            self._combo_action(combo_map[action_to_perform], is_kick=True)
+        else: 
+            self.pyboy.send_input(action_to_perform)
             for i in range(self.act_freq):
-                if i == 4:
-                    if action < 4:
-                        self.pyboy.send_input(self.release_arrow[action])
-                    elif 4 <= action < 6:
-                        self.pyboy.send_input(self.release_button[action - 4])
-                if self.save_video and not self.fast_video:
-                    self.add_video_frame()
+                if i == self.act_freq // 2:
+                    if action_idx < 4: self.pyboy.send_input(self.release_arrow[action_idx])
+                    elif 4 <= action_idx < 6: self.pyboy.send_input(self.release_button[action_idx - 4])
                 self.pyboy.tick()
-            if self.save_video and self.fast_video:
-                self.add_video_frame()
 
-    def combo_action(self, inputs):
-        for i in inputs:
-            self.pyboy.send_input(i)
-        self.pyboy.tick()
-        for i in inputs:
-            self.pyboy.send_input(i + 1)  # Release versions
-        self.kick_penalty = True
-
-    def add_video_frame(self):
-        self.full_frame_writer.add_image(self.render(reduce_res=False))
-
-    def create_recent_memory(self):
-        return rearrange(self.recent_memory, '(w h) c -> h w c', h=self.memory_height)
-
-    def create_exploration_memory(self):
-        def make_channel(val):
-            val = max(0, min(val, (self.output_shape[1] - 1) * self.memory_height * self.col_steps))
-            row = floor(val / (self.memory_height * self.col_steps))
-            memory = np.zeros((self.memory_height, self.output_shape[1]), dtype=np.uint8)
-            memory[:, :row] = 255
-            r_covered = row * self.memory_height * self.col_steps
-            col = floor((val - r_covered) / self.col_steps)
-            memory[:col, row] = 255
-            last = floor(val - r_covered - col * self.col_steps)
-            memory[col, row] = last * (255 // self.col_steps)
-            return memory
-
-        score, pos, level, lives = self.group_rewards()
-        return np.stack([make_channel(level), make_channel(pos), make_channel(pos)], axis=-1)
-
-    def group_rewards(self):
-        r = self.progress_reward
-        return (r['score'], r['pos'], r['level'], r['lives'])
-
-    def get_game_state_reward(self):
-        return {
-            'score': self.get_score_reward() // 10,
-            'pos': self.get_position_reward(),
-            'level': self.get_level_reward(),
-            'lives': self.get_lives_reward() * 15,
-            'moves': self.get_moves_penalty()
+    def _combo_action(self, inputs: list, is_kick: bool = False):
+        for event_press in inputs:
+            self.pyboy.send_input(event_press)
+        
+        for _ in range(max(1, self.act_freq // 2)):
+             self.pyboy.tick()
+        
+        release_map = {
+            WindowEvent.PRESS_BUTTON_A: WindowEvent.RELEASE_BUTTON_A,
+            WindowEvent.PRESS_BUTTON_B: WindowEvent.RELEASE_BUTTON_B,
+            WindowEvent.PRESS_ARROW_UP: WindowEvent.RELEASE_ARROW_UP,
+            WindowEvent.PRESS_ARROW_DOWN: WindowEvent.RELEASE_ARROW_DOWN,
+            WindowEvent.PRESS_ARROW_LEFT: WindowEvent.RELEASE_ARROW_LEFT,
+            WindowEvent.PRESS_ARROW_RIGHT: WindowEvent.RELEASE_ARROW_RIGHT,
         }
+        for event_press in reversed(inputs): 
+            if event_press in release_map:
+                 self.pyboy.send_input(release_map[event_press])
+        
+        for _ in range(max(1, self.act_freq - (self.act_freq // 2))):
+            self.pyboy.tick()
+        if is_kick: self.kick_penalty = True
 
-    def update_reward(self):
-        old_prog = self.group_rewards()
-        self.progress_reward = self.get_game_state_reward()
-        new_prog = self.group_rewards()
-        new_total = sum(self.progress_reward.values())
-        delta = new_total - self.total_reward
-        self.total_reward = new_total
-        return delta, new_prog
+    def _get_current_score(self) -> int:
+        try:
+            s_bytes = [self.pyboy.get_memory_value(addr) for addr in range(0xC640, 0xC645)] 
+            s = 0
+            for digit in s_bytes: s = s * 10 + digit
+            return s
+        except Exception: return getattr(self, 'last_score', 0)
 
-    def check_if_done(self):
-        return self.step_count >= self.max_steps or self.total_lives_rew == 0
+    def _get_player_x_pos(self) -> int: 
+        try: return self.pyboy.get_memory_value(0xE100) 
+        except: return getattr(self, 'old_x_pos', 0)
 
-    def get_score(self):
-        vals = [PyBoy.get_memory_value(self.pyboy, addr) for addr in range(0xC640, 0xC646)]
-        return int("".join(map(str, vals)))
+    def _get_player_y_pos(self) -> int: 
+        try: return self.pyboy.get_memory_value(0xE210) 
+        except: return getattr(self, 'old_y_pos', 0)
+        
+    def _get_current_level(self) -> int:
+        try: return self.pyboy.get_memory_value(0xE110) 
+        except: return getattr(self, 'last_level', 0)
 
-    def get_score_reward(self):
-        new_score = self.get_score()
-        delta = new_score - self.last_score
-        if delta:
-            self.last_score = new_score
-            self.total_score_rew += delta
-        return delta
+    def _get_current_lives(self) -> int:
+        try: return self.pyboy.get_memory_value(0xC499) 
+        except: return getattr(self, 'last_lives', 3)
 
-    def get_position_reward(self):
-        x = [PyBoy.get_memory_value(self.pyboy, a) for a in range(0xE100, 0xE110)]
-        y = [PyBoy.get_memory_value(self.pyboy, a) for a in range(0xE210, 0xE220)]
-        reward = 0.5 if x != getattr(self, "old_x_pos", []) or y != getattr(self, "old_y_pos", []) else -0.5
-        self.old_x_pos = x
-        self.old_y_pos = y
-        return reward
+    def _get_current_game_state_potentials(self) -> Dict[str, float]:
+        score_potential = self._get_current_score() * 0.01 
+        level_val = self._get_current_level()
+        level_reward_map = {15: 0, 84: 500, 48: 600, 89: 700, 11: 800} 
+        level_potential = float(level_reward_map.get(level_val, self.last_level * 10))
+        lives_potential = self._get_current_lives() * 150.0 
+        return {'score': score_potential, 'level': level_potential, 'lives': lives_potential}
 
-    def get_level(self):
-        return PyBoy.get_memory_value(self.pyboy, 0xE110)
+    def _calculate_reward_from_potentials(self) -> float:
+        current_potentials = self._get_current_game_state_potentials()
+        score_reward = current_potentials['score'] - self.game_state_reward_components.get('score', current_potentials['score'])
+        level_reward = 0.0 # Initialize level_reward
+        current_level_val = self._get_current_level()
+        if current_level_val != self.last_level: # If level changed
+             level_reward_map_direct = {15: 0, 84: 50, 48: 60, 89: 70, 11: 80} # Original direct rewards
+             if current_level_val in level_reward_map_direct and not self.locations.get(current_level_val, False):
+                 level_reward = float(level_reward_map_direct[current_level_val])
+                 self.locations[current_level_val] = True # Mark as visited for this episode
+                 self.unique_levels_completed_in_episode += 1 # Increment unique level counter
+        
+        lives_reward_penalty = 0.0
+        if self._get_current_lives() < self.last_lives: 
+            lives_reward_penalty = -100.0 
 
-    def get_level_reward(self):
-        level = self.get_level()
-        reward_map = {15: 0, 84: 50, 48: 60, 89: 70, 11: 80}
+        self.game_state_reward_components = current_potentials
+        self.last_score = self._get_current_score()
+        self.last_lives = self._get_current_lives()
+        self.last_level = current_level_val 
 
-        if level in reward_map:
-            if level not in self.locations:
-                self.locations[level] = False  # Initialize if missing
+        pos_change_reward = 0.0
+        current_x = self._get_player_x_pos()
+        current_y = self._get_player_y_pos()
+        if current_x != self.old_x_pos or current_y != self.old_y_pos:
+            pos_change_reward = 0.05 
+        self.old_x_pos = current_x
+        self.old_y_pos = current_y
 
-            if not self.locations[level]:
-                self.locations[level] = True
-                self.levels += 1
-                self.last_level = level
-                return reward_map[level]
-        return 0
+        kick_penalty_val = -1.0 if self.kick_penalty else 0.0
+        if self.kick_penalty: self.kick_penalty = False
 
-    def get_lives(self):
-        return PyBoy.get_memory_value(self.pyboy, 0xC499)
+        total_step_reward = score_reward + level_reward + lives_reward_penalty + pos_change_reward + kick_penalty_val
+        return total_step_reward * 0.1
 
-    def get_lives_reward(self):
-        lives = self.get_lives()
-        delta = lives - self.last_lives
-        self.last_lives = lives
-        self.total_lives_rew = lives
-        return -10 if lives == 0 else delta
+    def _create_recent_memory(self) -> np.ndarray:
+        obs_width = self.observation_space_shape[1]
+        obs_channels = self.observation_space_shape[2]
+        return np.zeros((self.memory_height, obs_width, obs_channels), dtype=np.uint8)
 
-    def get_moves_penalty(self):
-        if self.kick_penalty:
-            self.kick_penalty = False
-            return -10
-        return 0
+    def _create_exploration_memory(self) -> np.ndarray:
+        def make_channel_original(val_to_encode):
+            obs_width = self.observation_space_shape[1]
+            current_col_steps = max(1, self.col_steps) 
+            max_encodable_val = (obs_width - 1) * self.memory_height * current_col_steps
+            val = max(0, min(val_to_encode, max_encodable_val if max_encodable_val > 0 else val_to_encode ))
+
+            memory_channel = np.zeros((self.memory_height, obs_width), dtype=np.uint8)
+            if current_col_steps == 0: return memory_channel
+
+            full_cols_to_light = floor(val / (self.memory_height * current_col_steps))
+            full_cols_to_light = min(full_cols_to_light, obs_width -1) 
+
+            if full_cols_to_light >= 0 :
+                 memory_channel[:, :int(full_cols_to_light)] = 255
+            
+            if full_cols_to_light < obs_width : 
+                val_in_full_cols = full_cols_to_light * self.memory_height * current_col_steps
+                remaining_val = val - val_in_full_cols
+                
+                cells_in_current_col = floor(remaining_val / current_col_steps)
+                cells_in_current_col = min(cells_in_current_col, self.memory_height -1) 
+
+                if cells_in_current_col >=0:
+                    memory_channel[:int(cells_in_current_col), int(full_cols_to_light)] = 255
+                
+                if cells_in_current_col < self.memory_height: 
+                    last_val_in_cell = remaining_val - cells_in_current_col * current_col_steps
+                    intensity_step = (255 // current_col_steps)
+                    if cells_in_current_col >=0: 
+                         memory_channel[int(cells_in_current_col), int(full_cols_to_light)] = last_val_in_cell * intensity_step
+            return memory_channel
+
+        score_val = self._get_current_score() 
+        level_val = self._get_current_level() 
+        lives_val = self._get_current_lives() * 500 
+
+        channel1 = make_channel_original(score_val / 100 if score_val > 0 else 0) 
+        channel2 = make_channel_original(level_val * 100 if level_val > 0 else 0) 
+        channel3 = make_channel_original(lives_val if lives_val > 0 else 0)      
+
+        return np.stack([channel1, channel2, channel3], axis=-1).astype(np.uint8)
+
+    def close(self):
+        print(f"DDEnv Closing: Instance {self.instance_id}, Session {self.session}")
+        print(f"DDEnv Final Stats: Score = {self.last_score}, Unique Levels Completed = {self.unique_levels_completed_in_episode}")
+
+        if self.full_frame_writer is not None:
+            temp_video_path_to_upload = None
+            if self.current_video_temp_file:
+                temp_video_path_to_upload = self.current_video_temp_file.name
+            
+            try: self.full_frame_writer.close()
+            except Exception as e: print(f"DDEnv Warning: Error closing video writer during env close: {e}")
+            self.full_frame_writer = None
+
+            if temp_video_path_to_upload and Path(temp_video_path_to_upload).exists() and self.s3_client:
+                s3_object_key = f"{self.s3_video_prefix.strip('/')}/final_rollout_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}_vid{str(uuid.uuid4())[:4]}.mp4"
+                self._upload_video_to_s3(temp_video_path_to_upload, s3_object_key)
+
+            if self.current_video_temp_file:
+                try: self.current_video_temp_file.close() 
+                except: pass
+                self.current_video_temp_file = None
+        
+        if hasattr(self, 'pyboy') and self.pyboy is not None:
+            self.pyboy.stop(save_state=self.save_final_state)
+            print(f"PyBoy instance for DDEnv {self.instance_id} stopped.")

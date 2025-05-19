@@ -7,6 +7,7 @@ from ray.tune.registry import register_env
 from pathlib import Path
 import warnings
 import os
+import torch # Import torch to check for CUDA availability
 
 # Import your custom modules directly.
 # Ensure dd_env.py and custom_cnn_model.py are in the same directory
@@ -21,6 +22,28 @@ def main():
     """
     Main function to initialize Ray, configure, and run PPO training.
     """
+    # --- Check PyTorch CUDA availability ---
+    pytorch_cuda_available = torch.cuda.is_available()
+    print(f"Main Script: PyTorch CUDA available: {pytorch_cuda_available}")
+    if pytorch_cuda_available:
+        print(f"Main Script: PyTorch CUDA version: {torch.version.cuda}")
+        # Attempt to get cuDNN version, handle potential errors if not fully available
+        try:
+            cudnn_version = torch.backends.cudnn.version()
+            print(f"Main Script: PyTorch cuDNN version: {cudnn_version}")
+        except Exception as e:
+            print(f"Main Script: Could not retrieve PyTorch cuDNN version. Error: {e}")
+        print(f"Main Script: PyTorch cuDNN enabled: {torch.backends.cudnn.enabled}")
+        print(f"Main Script: Number of GPUs PyTorch sees: {torch.cuda.device_count()}")
+        if torch.cuda.device_count() > 0:
+            try:
+                print(f"Main Script: Current GPU name: {torch.cuda.get_device_name(0)}")
+            except Exception as e:
+                print(f"Main Script: Could not retrieve GPU name. Error: {e}")
+    else:
+        print("Main Script: PyTorch cannot find CUDA. Training will be on CPU.")
+    # --- End Check ---
+
     if not ray.is_initialized():
         print("Main Script: Initializing Ray...")
         ray.init(address='auto') # Connect to KubeRay cluster
@@ -46,8 +69,8 @@ def main():
         'headless': True, 'save_final_state': True, 'early_stop': False,
         'action_freq': 8, 'init_state': 'ignored/dd.gb.state', 'max_steps': ep_length,
         'print_rewards': False, # Set to False for less log spam from workers; RLlib logs aggregated rewards
-        'save_video': True,    # Set to True if you want videos from workers
-        'fast_video': True,
+        'save_video': False,    # Set to True if you want videos from workers
+        'fast_video': False,
         'gb_path': 'ignored/dd.gb', 'debug': False,
         'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True, 'extra_buttons': False
     }
@@ -57,7 +80,10 @@ def main():
     
     # Learner GPU (driver process on head node)
     # Your Ray cluster head has 1 GPU.
-    ppo_learner_num_gpus = 1 if int(ray.cluster_resources().get("GPU", 0)) > 0 else 0
+    detected_gpus_in_cluster = int(ray.cluster_resources().get("GPU", 0))
+    ppo_learner_num_gpus = 1 if detected_gpus_in_cluster > 0 and pytorch_cuda_available else 0 # Only request GPU if PyTorch sees it
+    print(f"Main Script: Detected GPUs in Ray cluster: {detected_gpus_in_cluster}")
+    print(f"Main Script: Requesting {ppo_learner_num_gpus} GPU(s) for the PPO learner.")
 
 
     # 1. Create the PPOConfig instance
@@ -78,12 +104,12 @@ def main():
     ppo_algo_config = (
         ppo_algo_config # Start chaining from the config object with attributes set
         .environment(env="dd_env", env_config=base_env_config, disable_env_checking=True)
-        .framework("torch")
-        .env_runners( # Or .rollout_workers for older Ray versions if .env_runners causes issues with 2.44.0
+        .framework("torch") # Ensure PyTorch framework is used for GPU training
+        .env_runners( 
             num_env_runners=num_rollout_workers,
             num_envs_per_env_runner=num_envs_per_worker,
             num_cpus_per_env_runner=3, # CPUs per rollout worker actor
-            # num_gpus_per_env_runner=0 # If envs themselves don't use GPU
+            # num_gpus_per_env_runner=0 # Correct for CPU-based environments like PyBoy
         )
         .training( 
             model={"custom_model": "custom_cnn"}, # This uses the ModelV2 API
@@ -116,7 +142,7 @@ def main():
     total_timesteps_to_train = 300_000 # For initial testing
 
     print(f"Main Script: Launching PPO training. Storing results in: {storage_path}")
-    print(f"Main Script: PPO Configuration: {full_ppo_config_dict}")
+    # print(f"Main Script: PPO Configuration: {full_ppo_config_dict}") # Can be very verbose
 
 
     results_analysis = tune.run(
@@ -149,3 +175,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
