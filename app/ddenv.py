@@ -16,10 +16,6 @@ from typing import Optional, Tuple, Dict, Any
 import tempfile # For temporary video files
 import boto3 # For S3 interaction
 
-# Commenting out problematic sys.path modification
-# file_path = os.path.dirname(os.path.realpath(__file__))
-# sys.path.insert(0, file_path + "/../..")
-
 class DDEnv(Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 60}
 
@@ -30,29 +26,26 @@ class DDEnv(Env):
         default_config = {
             'headless': True, 'save_final_state': False, 'early_stop': False,
             'action_freq': 8, 'init_state': 'ignored/dd.gb.state',
-            'max_steps': 2048 * 30, # Adjusted for typical episode length
+            'max_steps': 2048 * 30, 
             'print_rewards': True,
-            'save_video': False, 'fast_video': False, # S3 saving will be controlled by save_video
-            # 'session_path': Path(f'session_{str(uuid.uuid4())[:8]}'), # Local session_path less relevant if uploading to S3
+            'save_video': False, 
+            'fast_video': True, 
             'gb_path': 'ignored/dd.gb', 'debug': False,
             'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True,
             'extra_buttons': False,
-            # S3 specific config defaults (to be overridden by env vars or RLlib config)
             's3_bucket_name': os.environ.get('S3_BUCKET_NAME'),
-            's3_endpoint_url': os.environ.get('S3_ENDPOINT_URL'), # For S3 compatible storage
+            's3_endpoint_url': os.environ.get('S3_ENDPOINT_URL'),
             's3_access_key_id': os.environ.get('S3_ACCESS_KEY_ID'),
             's3_secret_access_key': os.environ.get('S3_SECRET_ACCESS_KEY'),
             's3_region_name': os.environ.get('S3_REGION_NAME'),
-            's3_video_prefix': 'ddenv_videos/' # Prefix for S3 object keys
+            's3_video_prefix': 'ddenv_videos/',
+            's3_state_prefix': 'ddenv_states/' # New prefix for saved states
         }
         
         for key, val in default_config.items():
             config.setdefault(key, val)
 
         self.debug = config['debug']
-        # self.s_path = Path(config['session_path']) # Local session path for non-S3 things if any
-        # self.s_path.mkdir(parents=True, exist_ok=True) # Create if still used
-
         self.gb_path = Path(config['gb_path']) 
         self.save_final_state = config['save_final_state']
         self.print_rewards = config['print_rewards']
@@ -109,7 +102,10 @@ class DDEnv(Env):
         self.s3_client = None
         self.s3_bucket_name = config.get('s3_bucket_name')
         self.s3_video_prefix = config.get('s3_video_prefix', 'ddenv_videos/')
-        if self.save_video and self.s3_bucket_name:
+        self.s3_state_prefix = config.get('s3_state_prefix', 'ddenv_states/') # For saved states
+
+        # Initialize S3 client only if bucket name is provided and either video or state saving is enabled
+        if (self.save_video or self.save_final_state) and self.s3_bucket_name:
             try:
                 s3_params = {
                     'aws_access_key_id': config.get('s3_access_key_id'),
@@ -125,12 +121,15 @@ class DDEnv(Env):
                 self.s3_client = boto3.client('s3', **s3_params)
                 print(f"DDEnv: S3 client initialized for bucket '{self.s3_bucket_name}'. Endpoint: {endpoint_url if endpoint_url else 'AWS Default'}")
             except Exception as e:
-                print(f"DDEnv Warning: Failed to initialize S3 client. Videos will not be saved to S3. Error: {e}")
+                print(f"DDEnv Warning: Failed to initialize S3 client. S3 features disabled. Error: {e}")
                 self.s3_client = None 
-                self.save_video = False 
-        elif self.save_video and not self.s3_bucket_name:
-            print("DDEnv Warning: `save_video` is True, but `s3_bucket_name` is not configured. Videos will not be saved to S3.")
-            self.save_video = False
+                # self.save_video = False # Don't disable video saving yet, might save locally if s_path was configured
+                # self.save_final_state = False 
+        elif (self.save_video or self.save_final_state) and not self.s3_bucket_name:
+            print("DDEnv Warning: S3 saving enabled but `s3_bucket_name` not configured. S3 features disabled.")
+            # self.save_video = False
+            # self.save_final_state = False
+
 
         if not self.gb_path.exists():
             script_dir = Path(__file__).parent.resolve()
@@ -153,7 +152,7 @@ class DDEnv(Env):
         self.current_video_temp_file = None 
         self.game_state_reward_components = {}
         self.previous_total_game_state_reward = 0.0
-        self.unique_levels_completed_in_episode = 0 # Initialize level counter
+        self.unique_levels_completed_in_episode = 0 
 
     def _get_initial_game_state(self):
         resolved_init_state = self.init_state
@@ -182,24 +181,30 @@ class DDEnv(Env):
             except Exception as e: print(f"DDEnv Warning: Error closing previous video writer: {e}")
             self.full_frame_writer = None
         if self.current_video_temp_file is not None:
-            try: self.current_video_temp_file.close() 
-            except Exception as e: print(f"DDEnv Warning: Error closing previous temp video file: {e}")
+            try: 
+                self.current_video_temp_file.close() # This should delete the temp file if delete=True
+                if Path(self.current_video_temp_file.name).exists(): # If delete=False, manually remove
+                    os.remove(self.current_video_temp_file.name)
+            except Exception as e: print(f"DDEnv Warning: Error closing/deleting previous temp video file: {e}")
             self.current_video_temp_file = None
 
         if self.save_video: 
             try:
-                self.current_video_temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+                # delete=False so we can control deletion after upload
+                self.current_video_temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) 
                 temp_video_path = self.current_video_temp_file.name
                 
                 self.full_frame_writer = media.VideoWriter(
-                    path=temp_video_path, shape=(144, 160), fps=60
+                    path=temp_video_path, shape=(144, 160), fps=60 
                 )
                 self.full_frame_writer.__enter__()
             except Exception as e:
                 print(f"DDEnv Warning: Failed to start video recording. Error: {e}")
-                self.save_video = False 
+                self.save_video = False # Disable for this episode if setup fails
                 if self.current_video_temp_file:
-                    self.current_video_temp_file.close()
+                    self.current_video_temp_file.close() # This will delete if delete=True
+                    if Path(self.current_video_temp_file.name).exists() and not self.current_video_temp_file.delete:
+                        os.remove(self.current_video_temp_file.name)
                     self.current_video_temp_file = None
 
         self.recent_frames = np.zeros(self.recent_frames_np_shape, dtype=np.uint8)
@@ -216,29 +221,33 @@ class DDEnv(Env):
         self.locations = {i: False for i in range(1, 8)} 
         self.game_state_reward_components = self._get_current_game_state_potentials()
         self.previous_total_game_state_reward = sum(self.game_state_reward_components.values())
-        self.unique_levels_completed_in_episode = 0 # Reset level counter for new episode
+        self.unique_levels_completed_in_episode = 0 
         
         self.reset_count += 1
         obs = self._get_observation()
         info = self._get_info()
         return obs, info
 
-    def _upload_video_to_s3(self, local_file_path: str, s3_object_key: str):
+    def _upload_file_to_s3(self, local_file_path: str, s3_object_key: str, content_type: Optional[str] = None):
         if not self.s3_client or not self.s3_bucket_name:
-            print("DDEnv Warning: S3 client or bucket not configured. Cannot upload video.")
+            print(f"DDEnv Warning: S3 client or bucket not configured. Cannot upload {local_file_path}.")
             return
         try:
-            print(f"DDEnv Info: Uploading video {local_file_path} to S3 bucket '{self.s3_bucket_name}' as '{s3_object_key}'...")
-            self.s3_client.upload_file(local_file_path, self.s3_bucket_name, s3_object_key)
-            print(f"DDEnv Info: Video successfully uploaded to s3://{self.s3_bucket_name}/{s3_object_key}")
+            extra_args = {}
+            if content_type:
+                extra_args['ContentType'] = content_type
+            
+            print(f"DDEnv Info: Uploading {local_file_path} to S3 bucket '{self.s3_bucket_name}' as '{s3_object_key}'...")
+            self.s3_client.upload_file(local_file_path, self.s3_bucket_name, s3_object_key, ExtraArgs=extra_args)
+            print(f"DDEnv Info: File successfully uploaded to s3://{self.s3_bucket_name}/{s3_object_key}")
         except Exception as e:
-            print(f"DDEnv Error: Failed to upload video to S3. Error: {e}")
+            print(f"DDEnv Error: Failed to upload {local_file_path} to S3. Error: {e}")
         finally:
             if Path(local_file_path).exists():
                 try:
                     os.remove(local_file_path)
                 except Exception as e_del:
-                    print(f"DDEnv Warning: Failed to delete temporary video file {local_file_path}. Error: {e_del}")
+                    print(f"DDEnv Warning: Failed to delete temporary file {local_file_path}. Error: {e_del}")
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, dict]:
         self._run_action_on_emulator(action)
@@ -249,9 +258,8 @@ class DDEnv(Env):
         terminated, truncated = self._check_episode_end()
         
         if self.save_video and self.full_frame_writer is not None:
-            if not self.fast_video or terminated or truncated: 
-                self.full_frame_writer.add_image(self.screen.screen_ndarray())
-
+            self.full_frame_writer.add_image(self.screen.screen_ndarray())
+        
         if (terminated or truncated) and self.save_video and self.full_frame_writer is not None:
             temp_video_path_to_upload = None
             if self.current_video_temp_file:
@@ -261,18 +269,23 @@ class DDEnv(Env):
                 self.full_frame_writer.close()
             except Exception as e:
                 print(f"DDEnv Warning: Failed to close video writer: {e}")
-            self.full_frame_writer = None
+            self.full_frame_writer = None # Mark as closed
             
             if temp_video_path_to_upload and Path(temp_video_path_to_upload).exists() and self.s3_client:
                 s3_object_key = f"{self.s3_video_prefix.strip('/')}/rollout_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}_vid{str(uuid.uuid4())[:4]}.mp4"
-                self._upload_video_to_s3(temp_video_path_to_upload, s3_object_key)
+                self._upload_file_to_s3(temp_video_path_to_upload, s3_object_key, content_type='video/mp4')
             
             if self.current_video_temp_file: 
-                try: self.current_video_temp_file.close()
+                try: 
+                    # If delete=False was used for NamedTemporaryFile, it's already removed by _upload_file_to_s3
+                    # If delete=True, this close would delete it. Since we use delete=False and manual os.remove,
+                    # just ensure the object is closed if not already.
+                    if not self.current_video_temp_file.closed:
+                         self.current_video_temp_file.close()
                 except: pass
                 self.current_video_temp_file = None
 
-        if self.print_rewards and (terminated or truncated or self.step_count % 500 == 0):
+        if self.step_count % 100 == 0):
             print(f"DDEnv (Instance: {self.instance_id}, Session: {self.session}, Reset: {self.reset_count-1}), Step: {self.step_count}, Action: {action}, Reward: {reward:.4f}, Term: {terminated}, Trunc: {truncated}, Lives: {self.last_lives}, Score: {self.last_score}")
 
         info = self._get_info()
@@ -382,14 +395,14 @@ class DDEnv(Env):
     def _calculate_reward_from_potentials(self) -> float:
         current_potentials = self._get_current_game_state_potentials()
         score_reward = current_potentials['score'] - self.game_state_reward_components.get('score', current_potentials['score'])
-        level_reward = 0.0 # Initialize level_reward
+        level_reward = 0.0 
         current_level_val = self._get_current_level()
-        if current_level_val != self.last_level: # If level changed
-             level_reward_map_direct = {15: 0, 84: 50, 48: 60, 89: 70, 11: 80} # Original direct rewards
+        if current_level_val != self.last_level: 
+             level_reward_map_direct = {15: 0, 84: 50, 48: 60, 89: 70, 11: 80} 
              if current_level_val in level_reward_map_direct and not self.locations.get(current_level_val, False):
                  level_reward = float(level_reward_map_direct[current_level_val])
-                 self.locations[current_level_val] = True # Mark as visited for this episode
-                 self.unique_levels_completed_in_episode += 1 # Increment unique level counter
+                 self.locations[current_level_val] = True 
+                 self.unique_levels_completed_in_episode += 1 
         
         lives_reward_penalty = 0.0
         if self._get_current_lives() < self.last_lives: 
@@ -463,27 +476,71 @@ class DDEnv(Env):
         return np.stack([channel1, channel2, channel3], axis=-1).astype(np.uint8)
 
     def close(self):
-        print(f"DDEnv Closing: Instance {self.instance_id}, Session {self.session}")
-        print(f"DDEnv Final Stats: Score = {self.last_score}, Unique Levels Completed = {self.unique_levels_completed_in_episode}")
+        """Closes the environment, saves final state and video if configured, and stops PyBoy."""
+        print(f"DDEnv Closing: Instance {self.instance_id}, Session {self.session}, Reset Count: {self.reset_count-1}")
+        final_score = self._get_current_score() # Get score one last time
+        final_lives = self._get_current_lives() # Get lives one last time
+        print(f"DDEnv Final Stats: Score = {final_score}, Lives = {final_lives}, Unique Levels Completed in Episode = {self.unique_levels_completed_in_episode}")
 
+        # Save final video frame if episode was ongoing and writer exists
+        if self.save_video and self.full_frame_writer is not None and not self.full_frame_writer.closed:
+            try:
+                self.full_frame_writer.add_image(self.screen.screen_ndarray()) # Add one last frame
+                print("DDEnv Info: Added final frame to video before closing.")
+            except Exception as e:
+                print(f"DDEnv Warning: Could not add final frame to video: {e}")
+        
+        # Close video writer and upload
         if self.full_frame_writer is not None:
             temp_video_path_to_upload = None
             if self.current_video_temp_file:
                 temp_video_path_to_upload = self.current_video_temp_file.name
             
-            try: self.full_frame_writer.close()
+            try: 
+                if not self.full_frame_writer.closed: # mediapy doesn't have .closed, check if writer is not None
+                    self.full_frame_writer.close()
             except Exception as e: print(f"DDEnv Warning: Error closing video writer during env close: {e}")
             self.full_frame_writer = None
 
             if temp_video_path_to_upload and Path(temp_video_path_to_upload).exists() and self.s3_client:
-                s3_object_key = f"{self.s3_video_prefix.strip('/')}/final_rollout_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}_vid{str(uuid.uuid4())[:4]}.mp4"
-                self._upload_video_to_s3(temp_video_path_to_upload, s3_object_key)
-
-            if self.current_video_temp_file:
-                try: self.current_video_temp_file.close() 
+                s3_object_key = f"{self.s3_video_prefix.strip('/')}/final_video_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}_vid{str(uuid.uuid4())[:4]}.mp4"
+                self._upload_file_to_s3(temp_video_path_to_upload, s3_object_key, content_type='video/mp4')
+            
+            if self.current_video_temp_file: # Ensure temp file object is closed and thus deleted
+                try: 
+                    if not self.current_video_temp_file.closed:
+                        self.current_video_temp_file.close() 
+                    # If delete=False, os.remove is handled by _upload_file_to_s3
                 except: pass
                 self.current_video_temp_file = None
         
+        # Save final game state if configured
+        if self.save_final_state and hasattr(self, 'pyboy') and self.pyboy is not None:
+            state_temp_file = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".state", delete=False) as state_temp_file_obj:
+                    state_temp_file = state_temp_file_obj.name
+                    self.pyboy.save_state(state_temp_file_obj) # PyBoy saves to a file-like object
+                
+                print(f"DDEnv Info: Final game state saved to temporary file: {state_temp_file}")
+                
+                if self.s3_client and self.s3_bucket_name and state_temp_file:
+                    s3_state_key = f"{self.s3_state_prefix.strip('/')}/final_state_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}.state"
+                    self._upload_file_to_s3(state_temp_file, s3_state_key, content_type='application/octet-stream')
+                elif not self.s3_client: # Fallback to local save if S3 not configured but save_final_state is true
+                    local_state_path = Path.cwd() / f"final_state_{self.instance_id}_reset{self.reset_count-1}.state"
+                    Path(state_temp_file).rename(local_state_path)
+                    print(f"DDEnv Info: S3 not configured. Final game state saved locally to: {local_state_path}")
+
+
+            except Exception as e:
+                print(f"DDEnv Warning: Failed to save final game state. Error: {e}")
+            finally:
+                # Ensure temp file is removed if it still exists and wasn't handled by _upload_file_to_s3
+                if state_temp_file and Path(state_temp_file).exists():
+                    try: os.remove(state_temp_file)
+                    except: pass
+        
         if hasattr(self, 'pyboy') and self.pyboy is not None:
-            self.pyboy.stop(save_state=self.save_final_state)
+            self.pyboy.stop() # PyBoy stop() method does not take arguments
             print(f"PyBoy instance for DDEnv {self.instance_id} stopped.")
