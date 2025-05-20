@@ -12,7 +12,7 @@ import mediapy as media # Ensure mediapy is in your Pipfile/requirements
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 from gymnasium import Env, spaces # Correct import for Gymnasium
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 import tempfile # For temporary video files
 import boto3 # For S3 interaction
 
@@ -25,10 +25,17 @@ class DDEnv(Env):
 
         default_config = {
             'headless': True, 'save_final_state': False, 'early_stop': False,
-            'action_freq': 8, 'init_state': 'ignored/dd.gb.state',
-            'max_steps': 2048 * 30, 
+            'action_freq': 8, 
+            # Directory containing .state files
+            'init_state_dir': 'ignored/', 
+            # List of .state filenames within init_state_dir
+            'available_init_states': [ 
+                'boss.dd.gb.state', 'lvl2-dd.gb.state', 'lvl3.5-dd.gb.state',
+                'dd.gb.state', 'lvl-1.5.dd.gb.state', 'lvl3-dd.gb.state'
+            ],
+            'max_steps': 2048 * 6, # Max steps per episode, adjust as needed
             'print_rewards': True,
-            'save_video': False, 
+            'save_video': True,
             'fast_video': True, 
             'gb_path': 'ignored/dd.gb', 'debug': False,
             'sim_frame_dist': 2_000_000.0, 'use_screen_explore': True,
@@ -39,18 +46,49 @@ class DDEnv(Env):
             's3_secret_access_key': os.environ.get('S3_SECRET_ACCESS_KEY'),
             's3_region_name': os.environ.get('S3_REGION_NAME'),
             's3_video_prefix': 'ddenv_videos/',
-            's3_state_prefix': 'ddenv_states/' # New prefix for saved states
+            's3_state_prefix': 'ddenv_states/' # Prefix for saved states
         }
         
         for key, val in default_config.items():
             config.setdefault(key, val)
 
         self.debug = config['debug']
-        self.gb_path = Path(config['gb_path']) 
+        self.gb_path_orig = Path(config['gb_path']) # Keep original for resolution
         self.save_final_state = config['save_final_state']
         self.print_rewards = config['print_rewards']
         self.headless = config['headless']
-        self.init_state = Path(config['init_state'])
+        
+        self.init_state_dir_orig = Path(config['init_state_dir']) # Keep original for resolution
+        self.available_state_filenames = list(config['available_init_states'])
+        if not self.available_state_filenames:
+            raise ValueError("Configuration 'available_init_states' must not be empty.")
+        
+        # Resolve paths robustly
+        self.gb_path = self._resolve_path_robustly(self.gb_path_orig, is_dir=False)
+        if self.gb_path is None or not self.gb_path.is_file():
+            raise FileNotFoundError(f"GB ROM not found. Tried: {self.gb_path_orig}")
+        
+        self.init_state_dir = self._resolve_path_robustly(self.init_state_dir_orig, is_dir=True)
+        if self.init_state_dir is None or not self.init_state_dir.is_dir():
+            raise FileNotFoundError(f"Initial state directory not found. Tried: {self.init_state_dir_orig}")
+
+        self.init_state_paths: List[Path] = []
+        for fname in self.available_state_filenames:
+            state_path = self.init_state_dir / fname
+            if state_path.is_file():
+                self.init_state_paths.append(state_path)
+            else:
+                print(f"DDEnv Warning: Specified initial state file not found: {state_path}")
+        
+        if not self.init_state_paths:
+            raise FileNotFoundError(
+                f"No valid state files found in resolved directory '{self.init_state_dir}' "
+                f"from the list: {self.available_state_filenames}. "
+                f"Ensure these files exist in the 'ignored/' folder within your Ray job's working_dir."
+            )
+        print(f"DDEnv: Found {len(self.init_state_paths)} valid initial state files in {self.init_state_dir}.")
+
+
         self.act_freq = int(config['action_freq'])
         self.max_steps = int(config['max_steps'])
         self.early_stopping = config['early_stop'] 
@@ -98,7 +136,6 @@ class DDEnv(Env):
             low=0, high=255, shape=self.observation_space_shape, dtype=np.uint8
         )
 
-        # S3 Client Initialization
         self.s3_client = None
         self.s3_bucket_name = config.get('s3_bucket_name')
         self.s3_video_prefix = config.get('s3_video_prefix', 'ddenv_videos/')
@@ -117,28 +154,13 @@ class DDEnv(Env):
                     s3_params['endpoint_url'] = endpoint_url
                 
                 s3_params = {k: v for k, v in s3_params.items() if v is not None}
-
                 self.s3_client = boto3.client('s3', **s3_params)
                 print(f"DDEnv: S3 client initialized for bucket '{self.s3_bucket_name}'. Endpoint: {endpoint_url if endpoint_url else 'AWS Default'}")
             except Exception as e:
                 print(f"DDEnv Warning: Failed to initialize S3 client. S3 features disabled. Error: {e}")
                 self.s3_client = None 
-                # self.save_video = False # Don't disable video saving yet, might save locally if s_path was configured
-                # self.save_final_state = False 
         elif (self.save_video or self.save_final_state) and not self.s3_bucket_name:
             print("DDEnv Warning: S3 saving enabled but `s3_bucket_name` not configured. S3 features disabled.")
-            # self.save_video = False
-            # self.save_final_state = False
-
-
-        if not self.gb_path.exists():
-            script_dir = Path(__file__).parent.resolve()
-            potential_path = script_dir / self.gb_path
-            if potential_path.exists(): self.gb_path = potential_path
-            else:
-                potential_path_cwd = Path.cwd() / self.gb_path
-                if potential_path_cwd.exists(): self.gb_path = potential_path_cwd
-                else: raise FileNotFoundError(f"GB ROM not found at {self.gb_path}, {script_dir / self.gb_path}, or {potential_path_cwd}")
         
         window = 'headless' if self.headless else 'SDL2'
         self.pyboy = PyBoy(str(self.gb_path), debugging=self.debug, disable_input=False, window_type=window)
@@ -154,26 +176,59 @@ class DDEnv(Env):
         self.previous_total_game_state_reward = 0.0
         self.unique_levels_completed_in_episode = 0 
 
+    def _resolve_path_robustly(self, relative_path_str: str, is_dir: bool = False) -> Optional[Path]:
+        """Tries to resolve a path relative to common locations."""
+        relative_path = Path(relative_path_str) # Ensure it's a Path object
+
+        # 1. Try as absolute or already correct relative path from CWD
+        path_from_cwd = (Path.cwd() / relative_path).resolve()
+        if path_from_cwd.exists() and (not is_dir or path_from_cwd.is_dir()):
+            # print(f"DDEnv Path Debug: Resolved {relative_path} via CWD to {path_from_cwd}")
+            return path_from_cwd
+        
+        # 2. Try relative to the script's directory (if __file__ is defined)
+        try:
+            # Resolve __file__ to an absolute path in case it's relative itself
+            script_file_path = Path(__file__).resolve()
+            script_dir = script_file_path.parent
+            path_from_script = (script_dir / relative_path).resolve()
+            if path_from_script.exists() and (not is_dir or path_from_script.is_dir()):
+                # print(f"DDEnv Path Debug: Resolved {relative_path} via script dir to {path_from_script}")
+                return path_from_script
+        except NameError: # __file__ might not be defined (e.g. in some interactive sessions)
+            # print(f"DDEnv Path Debug: __file__ not defined, cannot resolve {relative_path} via script dir.")
+            pass 
+            
+        # 3. If it's already an absolute path and exists
+        if relative_path.is_absolute() and relative_path.exists() and \
+           (not is_dir or relative_path.is_dir()):
+            # print(f"DDEnv Path Debug: Resolved {relative_path} as absolute path.")
+            return relative_path
+
+        print(f"DDEnv Path Warning: Could not resolve path {relative_path}. Tried CWD ({Path.cwd()}) and script dir.")
+        return None
+
     def _get_initial_game_state(self):
-        resolved_init_state = self.init_state
-        if not resolved_init_state.is_file(): 
-            script_dir = Path(__file__).parent.resolve()
-            potential_path = script_dir / self.init_state
-            if potential_path.is_file(): resolved_init_state = potential_path
-            else:
-                potential_path_cwd = Path.cwd() / self.init_state
-                if potential_path_cwd.is_file(): resolved_init_state = potential_path_cwd
-                else: raise FileNotFoundError(f"Initial game state file not found or not a file: {self.init_state}, {script_dir / self.init_state}, or {potential_path_cwd}")
-        with open(resolved_init_state, "rb") as f:
+        if not self.init_state_paths: 
+            raise RuntimeError("DDEnv Error: No valid initial state files available to load. Check 'init_state_dir' and 'available_init_states' config and file locations.")
+            
+        selected_state_file_path = random.choice(self.init_state_paths)
+        
+        print(f"DDEnv (Instance: {self.instance_id}): Loading initial state from: {selected_state_file_path.name} (full path: {selected_state_file_path})")
+        
+        if not selected_state_file_path.is_file(): 
+            raise FileNotFoundError(f"DDEnv Error: Selected initial game state file not found or not a file: {selected_state_file_path}")
+        
+        with open(selected_state_file_path, "rb") as f:
             self.pyboy.load_state(f)
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
         super().reset(seed=seed)
         if seed is not None:
-            random.seed(seed)
+            random.seed(seed) 
             np.random.seed(seed)
 
-        self._get_initial_game_state()
+        self._get_initial_game_state() 
         self.session = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4))
         
         if self.full_frame_writer is not None:
@@ -182,8 +237,9 @@ class DDEnv(Env):
             self.full_frame_writer = None
         if self.current_video_temp_file is not None:
             try: 
-                self.current_video_temp_file.close() # This should delete the temp file if delete=True
-                if Path(self.current_video_temp_file.name).exists(): # If delete=False, manually remove
+                if not self.current_video_temp_file.closed:
+                    self.current_video_temp_file.close() 
+                if Path(self.current_video_temp_file.name).exists(): # delete=False was used
                     os.remove(self.current_video_temp_file.name)
             except Exception as e: print(f"DDEnv Warning: Error closing/deleting previous temp video file: {e}")
             self.current_video_temp_file = None
@@ -201,9 +257,9 @@ class DDEnv(Env):
             except Exception as e:
                 print(f"DDEnv Warning: Failed to start video recording. Error: {e}")
                 self.save_video = False # Disable for this episode if setup fails
-                if self.current_video_temp_file:
-                    self.current_video_temp_file.close() # This will delete if delete=True
-                    if Path(self.current_video_temp_file.name).exists() and not self.current_video_temp_file.delete:
+                    if not self.current_video_temp_file.closed:
+                        self.current_video_temp_file.close()
+                    if Path(self.current_video_temp_file.name).exists(): # delete=False was used
                         os.remove(self.current_video_temp_file.name)
                     self.current_video_temp_file = None
 
@@ -285,7 +341,7 @@ class DDEnv(Env):
                 except: pass
                 self.current_video_temp_file = None
 
-        if self.step_count % 100 == 0):
+        if self.print_rewards and (terminated or truncated or self.step_count % 100 == 0):
             print(f"DDEnv (Instance: {self.instance_id}, Session: {self.session}, Reset: {self.reset_count-1}), Step: {self.step_count}, Action: {action}, Reward: {reward:.4f}, Term: {terminated}, Trunc: {truncated}, Lives: {self.last_lives}, Score: {self.last_score}")
 
         info = self._get_info()
@@ -385,7 +441,7 @@ class DDEnv(Env):
         except: return getattr(self, 'last_lives', 3)
 
     def _get_current_game_state_potentials(self) -> Dict[str, float]:
-        score_potential = self._get_current_score() * 0.01 
+        score_potential = self._get_current_score() * 0.05 
         level_val = self._get_current_level()
         level_reward_map = {15: 0, 84: 500, 48: 600, 89: 700, 11: 800} 
         level_potential = float(level_reward_map.get(level_val, self.last_level * 10))
@@ -398,7 +454,7 @@ class DDEnv(Env):
         level_reward = 0.0 
         current_level_val = self._get_current_level()
         if current_level_val != self.last_level: 
-             level_reward_map_direct = {15: 0, 84: 50, 48: 60, 89: 70, 11: 80} 
+             level_reward_map_direct = {15: 0, 84: 100, 48: 150, 89: 200, 11: 250}
              if current_level_val in level_reward_map_direct and not self.locations.get(current_level_val, False):
                  level_reward = float(level_reward_map_direct[current_level_val])
                  self.locations[current_level_val] = True 
@@ -406,7 +462,7 @@ class DDEnv(Env):
         
         lives_reward_penalty = 0.0
         if self._get_current_lives() < self.last_lives: 
-            lives_reward_penalty = -100.0 
+            lives_reward_penalty = -50.0 # More significant penalty
 
         self.game_state_reward_components = current_potentials
         self.last_score = self._get_current_score()
@@ -417,7 +473,7 @@ class DDEnv(Env):
         current_x = self._get_player_x_pos()
         current_y = self._get_player_y_pos()
         if current_x != self.old_x_pos or current_y != self.old_y_pos:
-            pos_change_reward = 0.05 
+            pos_change_reward = 0.15
         self.old_x_pos = current_x
         self.old_y_pos = current_y
 
@@ -483,21 +539,21 @@ class DDEnv(Env):
         print(f"DDEnv Final Stats: Score = {final_score}, Lives = {final_lives}, Unique Levels Completed in Episode = {self.unique_levels_completed_in_episode}")
 
         # Save final video frame if episode was ongoing and writer exists
-        if self.save_video and self.full_frame_writer is not None and not self.full_frame_writer.closed:
-            try:
-                self.full_frame_writer.add_image(self.screen.screen_ndarray()) # Add one last frame
-                print("DDEnv Info: Added final frame to video before closing.")
-            except Exception as e:
-                print(f"DDEnv Warning: Could not add final frame to video: {e}")
-        
-        # Close video writer and upload
-        if self.full_frame_writer is not None:
+        if self.save_video and self.full_frame_writer is not None: 
+            if not getattr(self.full_frame_writer, 'closed', True): 
+                try:
+                    self.full_frame_writer.add_image(self.screen.screen_ndarray()) 
+                    print("DDEnv Info: Added final frame to video before closing.")
+                except Exception as e:
+                    print(f"DDEnv Warning: Could not add final frame to video: {e}")
+            
+            # Close video writer and upload
             temp_video_path_to_upload = None
             if self.current_video_temp_file:
                 temp_video_path_to_upload = self.current_video_temp_file.name
             
             try: 
-                if not self.full_frame_writer.closed: # mediapy doesn't have .closed, check if writer is not None
+                if not getattr(self.full_frame_writer, 'closed', True): # mediapy doesn't always have .closed attribute
                     self.full_frame_writer.close()
             except Exception as e: print(f"DDEnv Warning: Error closing video writer during env close: {e}")
             self.full_frame_writer = None
@@ -506,7 +562,7 @@ class DDEnv(Env):
                 s3_object_key = f"{self.s3_video_prefix.strip('/')}/final_video_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}_vid{str(uuid.uuid4())[:4]}.mp4"
                 self._upload_file_to_s3(temp_video_path_to_upload, s3_object_key, content_type='video/mp4')
             
-            if self.current_video_temp_file: # Ensure temp file object is closed and thus deleted
+            if self.current_video_temp_file: 
                 try: 
                     if not self.current_video_temp_file.closed:
                         self.current_video_temp_file.close() 
@@ -516,31 +572,33 @@ class DDEnv(Env):
         
         # Save final game state if configured
         if self.save_final_state and hasattr(self, 'pyboy') and self.pyboy is not None:
-            state_temp_file = None
+            state_temp_file_path = None 
             try:
-                with tempfile.NamedTemporaryFile(suffix=".state", delete=False) as state_temp_file_obj:
-                    state_temp_file = state_temp_file_obj.name
-                    self.pyboy.save_state(state_temp_file_obj) # PyBoy saves to a file-like object
+                with tempfile.NamedTemporaryFile(suffix=".state", delete=False) as state_fp_obj:
+                    state_temp_file_path = state_fp_obj.name
+                    self.pyboy.save_state(state_fp_obj) 
                 
-                print(f"DDEnv Info: Final game state saved to temporary file: {state_temp_file}")
+                print(f"DDEnv Info: Final game state saved to temporary file: {state_temp_file_path}")
                 
-                if self.s3_client and self.s3_bucket_name and state_temp_file:
+                if self.s3_client and self.s3_bucket_name and state_temp_file_path:
                     s3_state_key = f"{self.s3_state_prefix.strip('/')}/final_state_reset{self.reset_count-1}_session{self.session}_id{self.instance_id}.state"
-                    self._upload_file_to_s3(state_temp_file, s3_state_key, content_type='application/octet-stream')
-                elif not self.s3_client: # Fallback to local save if S3 not configured but save_final_state is true
-                    local_state_path = Path.cwd() / f"final_state_{self.instance_id}_reset{self.reset_count-1}.state"
-                    Path(state_temp_file).rename(local_state_path)
+                    self._upload_file_to_s3(state_temp_file_path, s3_state_key, content_type='application/octet-stream')
+                elif not self.s3_client and Path(state_temp_file_path).exists(): 
+                    local_state_dir = Path.cwd() / "ddenv_final_states"
+                    local_state_dir.mkdir(parents=True, exist_ok=True)
+                    local_state_path = local_state_dir / f"final_state_{self.instance_id}_reset{self.reset_count-1}.state"
+                    Path(state_temp_file_path).rename(local_state_path)
                     print(f"DDEnv Info: S3 not configured. Final game state saved locally to: {local_state_path}")
-
+                    state_temp_file_path = None
 
             except Exception as e:
                 print(f"DDEnv Warning: Failed to save final game state. Error: {e}")
-            finally:
-                # Ensure temp file is removed if it still exists and wasn't handled by _upload_file_to_s3
-                if state_temp_file and Path(state_temp_file).exists():
-                    try: os.remove(state_temp_file)
-                    except: pass
+                if state_temp_file_path and Path(state_temp_file_path).exists():
+                    try: os.remove(state_temp_file_path)
+                    except Exception as e: 
+                        print(f"DDEnv Warning: Failed to remove temporary state file: {e}")
         
         if hasattr(self, 'pyboy') and self.pyboy is not None:
-            self.pyboy.stop() # PyBoy stop() method does not take arguments
+            self.pyboy.stop() 
             print(f"PyBoy instance for DDEnv {self.instance_id} stopped.")
+

@@ -63,7 +63,7 @@ config = (
 tune.run(
     "PPO",
     name="PPO_DoubleDragon",
-    stop={"timesteps_total": ep_length * 1000},
+    stop={"timesteps_total": ep_length * 10000},
     checkpoint_freq=10,
     storage_path=str(Path("~/ray_results/dd").expanduser()),  # Correct usage of storage_path
     config=config.to_dict()
