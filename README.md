@@ -15,6 +15,14 @@
   Toolkit, now stamped by `k8s/aro/gpu-machineset.sh`. Student latency on T4: ~0.7 s steady state. `fullgamevid8`
   (power-on, advice fallback + student via port-forward 18011) recording.
 # Application Documentation
+* **FULL VIDEO, mission 1 -> THE END (Oct 6, 18:18 local):** `~/Documents/DoubleDragon-full-mission1-to-credits.mp4`
+  (3m32s, 12,743 frames @60fps, 160x144). Part 1 = `fullgamevid8` power-on -> maze top ledge (frames 0-8595, 3 rewinds,
+  belts crossed on the advice policy, T4 student elsewhere); it then pinned 900 steps on the maze ledge (chunk 88, SCY
+  200, scx 167) from stale runner state - a fresh runner from the same snapshot walks out with either decision source.
+  Part 2 = `fullgamevid9` continued from that exact snapshot (`maze-vid8-s8717.state`; splice frame verified identical):
+  sealed room, hall, skull room, lock room 2, throne room, gunman drained by the damage-free search at HP 2, GAME
+  COMPLETE at step 2947 with 4 lives and ZERO rewinds, credits, THE END (v154q cutoff). A spliced continuous recording,
+  same emulator state at the join.
 
 ## Run Locally
 
