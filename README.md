@@ -1,3 +1,19 @@
+* **v154q/r + ARO (Oct 6):** (1) **v154q** ends the episode 1200 steps after GAME COMPLETE (credits measured at 973
+  steps from `fullgame13-GAME-COMPLETE.state`) through the env's own `max_steps`, so the mp4 stops at THE END.
+  (2) **v154r - the real "planner-only" wall:** with the student unreachable, `DecisionModelClient` returned a RANDOM
+  action between plans. vid5/6/7 never left mission 2 - the chunk ids 106/26 read as "cave/hideout" were reused ids at
+  SCY 152 (the conveyor floor); lives were lost at FULL HP falling through belt gaps. New `app/advice_policy.py` maps
+  the runner's own `radar_advice` (the text the model reads) to a button (first non-negated imperative, else travel
+  direction). A/B from the vid7 belt state: advice fallback crossed the belts in 254 steps with 3/3 lives; random lost
+  2 lives and never crossed. (3) **Student moved to Azure ARO** (RHDP, eastus, 4.19.24) after the RHDP ROSA cluster was
+  deleted. RHDP policy allows only T4 GPUs (`Standard_NC*_T4_v3`), so: one NC64as_T4_v3 (4x T4), the INT8 W8A8
+  checkpoint `aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic`, TP=4, `--dtype=half`, `--moe-backend=humming` (Triton's
+  INT8 fused-MoE cannot lower int8 dot on sm75), and a start-up patch to vLLM's Triton unified attention for sm75
+  (1 stage, 16-token KV tiles - 512-wide heads x 32-token tiles needed 96KB smem vs 64KB). FLEX_ATTENTION fails on
+  DiffusionGemma's per-request causal tensor. GPU operator from NVIDIA's Helm chart (the reused pull secret is revoked,
+  so Red Hat catalogs are down); upstream NFD lacks the RHCOS OSTREE_VERSION label the operator needs for the Driver
+  Toolkit, now stamped by `k8s/aro/gpu-machineset.sh`. Student latency on T4: ~0.7 s steady state. `fullgamevid8`
+  (power-on, advice fallback + student via port-forward 18011) recording.
 # Application Documentation
 
 ## Run Locally

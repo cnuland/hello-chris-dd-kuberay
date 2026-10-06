@@ -1,0 +1,166 @@
+# ARO variant for T4 (the RHDP Azure policy 'Deny expensive GPU VM SKUs (allow T4)' blocks A10/A100/H100):
+# ONE replica on Standard_NC64as_T4_v3 (4x T4 16GB = 64GB), tensor-parallel 4. T4 (Turing, sm75) has no FP8 and no
+# bfloat16, so this uses the W8A8 INT8 compressed-tensors checkpoint (same arch, router/vision unquantized, 27 GB)
+# with --dtype=half. Fallback if INT8 misbehaves: google/diffusiongemma-26B-A4B-it (51.7 GB) in float16.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dgemma
+  namespace: dgemma
+  labels:
+    app: dgemma
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dgemma
+  strategy:
+    type: Recreate     # single 2-GPU node, nothing to surge onto
+  template:
+    metadata:
+      labels:
+        app: dgemma
+    spec:
+      serviceAccountName: dgemma
+      nodeSelector:
+        workload: gpu
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      terminationGracePeriodSeconds: 60
+      volumes:
+      - name: cache            # HF download + vLLM/torch compile caches
+        emptyDir:
+          sizeLimit: 80Gi
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi   # NCCL shared memory for TP=2
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:nightly-e9757321527ca1ecd514c07c1418dd2c53da3d19
+        # T4 (sm75) has 64KB shared memory per block; Triton's default 3-stage pipeline makes the unified attention
+        # kernel ask for 96KB (512-wide heads x 32-token K/V tiles). Patch vLLM at start-up to launch it with 1 stage on pre-Ampere GPUs,
+        # then exec the normal `vllm serve` with the args below. (FLEX_ATTENTION is not an option: its metadata builder
+        # fails on DiffusionGemma's per-request causal tensor.)
+        command:
+        - /bin/bash
+        - -c
+        - |
+          F=/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/ops/triton_unified_attention.py
+          python3 - "$F" <<'PY'
+          import sys
+          p = sys.argv[1]; s = open(p).read()
+          anchor = "        launch_num_stages = 2\n"
+          patch = anchor + "    if not current_platform.has_device_capability(80):  # T4/sm75: 64KB smem per block\n        launch_num_stages = 1\n"
+          anchor2 = "        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)\n"
+          patch2 = anchor2 + "    if not current_platform.has_device_capability(80):  # T4/sm75 tile: head_size 512 x 32-token K/V tiles need 96KB\n        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, 16)\n        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, 16)\n"
+          if "T4/sm75" not in s:
+              assert anchor in s and anchor2 in s, "anchor not found"
+              s = s.replace(anchor, patch, 1).replace(anchor2, patch2, 1); open(p, "w").write(s)
+              print("patched triton_unified_attention for sm75 (1 stage, 16-token tiles)")
+          PY
+          exec vllm serve "$@"
+        - vllm-serve
+        args:
+        - "$(MODEL_ID)"
+        - --served-model-name=dgemma
+        - --host=0.0.0.0
+        - --port=8000
+        - --diffusion-config={"canvas_length":64}
+        - --max-logprobs=32
+        - --max-model-len=16384
+        - --max-num-seqs=8
+        - --tensor-parallel-size=4
+        - --dtype=half
+        - --moe-backend=humming      # Triton's INT8 fused-MoE kernel cannot lower int8 dot on sm75 (PassManager::run failed)
+        - --limit-mm-per-prompt={"image":2}
+        - --gpu-memory-utilization=0.92
+        env:
+        - name: MODEL_ID
+          value: aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic
+        - name: HOME
+          value: /cache
+        - name: HF_HOME
+          value: /cache/hf
+        - name: VLLM_CACHE_ROOT
+          value: /cache/vllm
+        - name: TRITON_CACHE_DIR
+          value: /cache/triton
+        - name: HF_HUB_ENABLE_HF_TRANSFER
+          value: "1"
+        - name: HF_TOKEN            # optional: only needed if you switch to a gated checkpoint
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              optional: true
+        ports:
+        - name: openai
+          containerPort: 8000
+        resources:
+          requests:
+            cpu: "5"
+            memory: 40Gi
+            nvidia.com/gpu: "4"
+          limits:
+            cpu: "16"
+            memory: 96Gi
+            nvidia.com/gpu: "4"
+        volumeMounts:
+        - name: cache
+          mountPath: /cache
+        - name: shm
+          mountPath: /dev/shm
+        startupProbe:                # 27 GB download + weight load + CUDA graph capture
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 15
+          failureThreshold: 120      # 30 min
+        readinessProbe:
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 30
+          failureThreshold: 6
+      - name: decision-server
+        image: vllm/vllm-openai:nightly-e9757321527ca1ecd514c07c1418dd2c53da3d19
+        command: ["python3"]
+        args:
+        - /vllm-workspace/examples/features/structured_diffusion/structured_server.py
+        - --upstream=http://127.0.0.1:8000
+        - --tokenizer=$(MODEL_ID)
+        - --model=dgemma
+        - --canvas=64
+        - --host=0.0.0.0
+        - --port=8011
+        env:
+        - name: MODEL_ID
+          value: aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic
+        - name: HOME
+          value: /cache
+        - name: HF_HOME
+          value: /cache/hf
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              optional: true
+        ports:
+        - name: decision
+          containerPort: 8011
+        resources:
+          requests: { cpu: "1", memory: 2Gi }
+          limits:   { cpu: "2", memory: 4Gi }
+        volumeMounts:
+        - name: cache
+          mountPath: /cache
+        startupProbe:
+          httpGet: { path: /health, port: 8011 }
+          periodSeconds: 15
+          failureThreshold: 120
+        readinessProbe:
+          httpGet: { path: /health, port: 8011 }
+          periodSeconds: 10

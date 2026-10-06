@@ -38,6 +38,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from decision_client import DecisionModelClient
+from advice_policy import advice_to_action   # v154r
+import dataclasses
 from reflex import BeltTracker, belt_reflex, belt_note, belt_tile_under, ledge_veto, rung_veto, pit_back_veto, air_veto, no_freelance_jump_veto, stones_autopilot, heavy_lane_veto, hole_margin_veto, heavy_autopilot, boss_combo_veto, walk_in_veto, HeavyGate, river_exit_veto, cave_hop_veto, ladder_align_veto
 from radar import sprite_radar, suggested_rule, ScrollTracker, read_health
 import radar as radar_mod
@@ -1222,6 +1224,13 @@ class EnvWorker:
                         # stuck: let the model think for a step (server-side reasoning) instead of the reflex answer
                         overrides = {"think": int(os.environ.get("DGEMMA_THINK_WHEN_STUCK", "1"))} if (stuck_dir and os.environ.get("DGEMMA_THINK_WHEN_STUCK", "1") != "0") else None
                         d = self.client.choose_action(obs, info, native, prev_name, extra, overrides)
+                        # v154r: the client's fallback was a RANDOM action - between plans that random walk is what dropped every
+                        # model-less run through the mission-2 conveyor gaps (fullgamevid5/6/7, lives lost at full HP). Follow the
+                        # same radar advice the model reads instead.
+                        if not d.ok and os.environ.get("DD_ADVICE_FALLBACK", "1") == "1":
+                            _act = advice_to_action(extra["radar_advice"], travel_dir, last_dir)
+                            if _act in self.action_names:
+                                d = dataclasses.replace(d, action=self.action_names.index(_act), name=_act)
                         fresh = True
                         last_advice = extra["radar_advice"]
                         # remember a direction decision so positional rules cannot flip it one step later (v24/v27/v28
@@ -1573,6 +1582,13 @@ class EnvWorker:
                         game_complete = True
                         print(f"*** GAME COMPLETE *** step {steps}: the doorway fade started (hp {read_health(self.env.pyboy)}, lives {self.env.pyboy.get_memory_value(0xC499)}) - credits next", flush=True)
                         self._save_state(ep, steps, "GAME-COMPLETE", saved_states)
+                        # v154q: end the episode once the credits have rolled so the video stops at THE END instead of idling to
+                        # max_steps. Measured from fullgame13-GAME-COMPLETE.state: the last screen change is 973 steps after the
+                        # fade. Truncating through the env's own max_steps lets DDEnv close the mp4 writer normally.
+                        _end_after = int(os.environ.get("DD_END_AFTER_COMPLETE", "1200"))
+                        if _end_after > 0:
+                            self.env.max_steps = min(self.env.max_steps, self.env.step_count + _end_after)
+                            print(f"credits: episode will end {_end_after} steps after GAME COMPLETE (env step {self.env.max_steps})", flush=True)
                     if game_complete:
                         plan = []; shaft_auto = "a"                                   # let the credits roll
                     stal_dodge = None
