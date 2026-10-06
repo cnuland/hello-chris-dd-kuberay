@@ -1,0 +1,37 @@
+# Headless service: one A record per ready replica. The env workers resolve this name
+# and round-robin over the addresses themselves (see app/decision_client.py), which gives
+# true per-request round robin instead of kube-proxy's per-connection random pick.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dgemma-headless
+  namespace: dgemma
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app: dgemma
+  ports:
+  - name: decision
+    port: 8011
+    targetPort: 8011
+  - name: openai
+    port: 8000
+    targetPort: 8000
+---
+# Regular ClusterIP for ad-hoc curl / notebooks.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dgemma
+  namespace: dgemma
+spec:
+  selector:
+    app: dgemma
+  ports:
+  - name: decision
+    port: 8011
+    targetPort: 8011
+  - name: openai
+    port: 8000
+    targetPort: 8000

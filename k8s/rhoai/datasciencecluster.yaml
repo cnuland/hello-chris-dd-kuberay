@@ -1,0 +1,32 @@
+# Only what this project uses: dashboard + workbenches (the notebook), CodeFlare SDK support,
+# KubeRay (Ray clusters), Kueue (the ClusterQueue/LocalQueue in k8s/setup-kueue.yaml).
+# KServe/ModelMesh are Removed on purpose: DiffusionGemma is served by the plain Deployment in
+# k8s/dgemma/, which avoids the Service Mesh + Serverless dependency chain.
+apiVersion: datasciencecluster.opendatahub.io/v1
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    codeflare:
+      managementState: Managed
+    dashboard:
+      managementState: Managed
+    datasciencepipelines:
+      managementState: Removed
+    kserve:
+      managementState: Removed
+    kueue:
+      managementState: Managed
+    modelmeshserving:
+      managementState: Removed
+    modelregistry:
+      managementState: Removed
+    ray:
+      managementState: Managed
+    trainingoperator:
+      managementState: Removed
+    trustyai:
+      managementState: Removed
+    workbenches:
+      managementState: Managed

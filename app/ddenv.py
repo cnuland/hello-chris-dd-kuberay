@@ -257,6 +257,7 @@ class DDEnv(Env):
             except Exception as e:
                 print(f"DDEnv Warning: Failed to start video recording. Error: {e}")
                 self.save_video = False # Disable for this episode if setup fails
+                if self.current_video_temp_file is not None:
                     if not self.current_video_temp_file.closed:
                         self.current_video_temp_file.close()
                     if Path(self.current_video_temp_file.name).exists(): # delete=False was used
@@ -388,9 +389,12 @@ class DDEnv(Env):
         else: 
             self.pyboy.send_input(action_to_perform)
             for i in range(self.act_freq):
-                if i == self.act_freq // 2:
-                    if action_idx < 4: self.pyboy.send_input(self.release_arrow[action_idx])
-                    elif 4 <= action_idx < 6: self.pyboy.send_input(self.release_button[action_idx - 4])
+                # Directions are held for the whole step so consecutive identical inputs form a continuous
+                # hold (entering doorways / climbing needs a sustained press). Buttons stay taps.
+                if action_idx < 4 and i == self.act_freq - 1:
+                    self.pyboy.send_input(self.release_arrow[action_idx])
+                elif 4 <= action_idx < 6 and i == self.act_freq // 2:
+                    self.pyboy.send_input(self.release_button[action_idx - 4])
                 self.pyboy.tick()
 
     def _combo_action(self, inputs: list, is_kick: bool = False):
@@ -417,10 +421,12 @@ class DDEnv(Env):
         if is_kick: self.kick_penalty = True
 
     def _get_current_score(self) -> int:
+        # Score is 6 decimal digits at 0xC640..0xC645, least significant digit FIRST (0xC645 is the
+        # most significant). Reading them 0xC640-first, as this used to, produced non-monotonic garbage.
         try:
-            s_bytes = [self.pyboy.get_memory_value(addr) for addr in range(0xC640, 0xC645)] 
             s = 0
-            for digit in s_bytes: s = s * 10 + digit
+            for addr in range(0xC645, 0xC63F, -1):
+                s = s * 10 + self.pyboy.get_memory_value(addr)
             return s
         except Exception: return getattr(self, 'last_score', 0)
 

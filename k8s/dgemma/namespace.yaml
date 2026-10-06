@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dgemma
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dgemma
+  namespace: dgemma

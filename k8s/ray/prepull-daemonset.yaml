@@ -1,0 +1,31 @@
+# Pre-pulls the Ray worker image on every ray-cpu node so RayCluster pods become Ready within Kueue's
+# waitForPodsReady timeout. The image is CUDA 11.7 + torch (multi-GB); a cold pull can exceed the
+# timeout, which makes Kueue evict and requeue the whole RayCluster in a loop.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: prepull-ray-worker
+  namespace: hello-chris-ai-4
+spec:
+  selector:
+    matchLabels: { app: prepull-ray-worker }
+  template:
+    metadata:
+      labels: { app: prepull-ray-worker }
+    spec:
+      nodeSelector:
+        workload: ray-cpu
+      initContainers:
+      - name: pull
+        image: quay.io/cnuland/dd-kuberay-worker:latest
+        command: ["/bin/sh", "-c", "echo image present"]
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits:   { cpu: 100m, memory: 64Mi }
+      containers:
+      - name: hold
+        image: registry.access.redhat.com/ubi9/ubi-minimal
+        command: ["/bin/sh", "-c", "sleep infinity"]
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits:   { cpu: 50m, memory: 64Mi }

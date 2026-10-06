@@ -14,6 +14,43 @@ import torch
 # must be in the working_dir of the Ray job.
 from ddenv import DDEnv 
 from custom_cnn_model import CustomCNNModel
+from ray.rllib.algorithms.callbacks import DefaultCallbacks
+
+
+class BCWarmStartCallbacks(DefaultCallbacks):
+    """Warm-start PPO's policy net from a behaviour-cloned copy of the decision model.
+
+    Set BC_INIT_WEIGHTS to a local path or s3://bucket/key produced by bc_pretrain.py. Only the conv
+    trunk and policy head are loaded; the value head starts fresh (PPO learns it quickly). Weights are
+    pushed to every env runner so rollouts start from the teacher-like policy immediately.
+    """
+
+    def on_algorithm_init(self, *, algorithm, **kwargs):
+        src = os.environ.get("BC_INIT_WEIGHTS")
+        if not src:
+            return
+        import io as _io
+        if src.startswith("s3://"):
+            import boto3
+            bucket, key = src[5:].split("/", 1)
+            params = {k: v for k, v in {
+                "aws_access_key_id": os.environ.get("S3_ACCESS_KEY_ID"),
+                "aws_secret_access_key": os.environ.get("S3_SECRET_ACCESS_KEY"),
+                "region_name": os.environ.get("S3_REGION_NAME"),
+                "endpoint_url": os.environ.get("S3_ENDPOINT_URL"),
+            }.items() if v}
+            blob = boto3.client("s3", **params).get_object(Bucket=bucket, Key=key)["Body"].read()
+            payload = torch.load(_io.BytesIO(blob), map_location="cpu")
+        else:
+            payload = torch.load(src, map_location="cpu")
+        policy = algorithm.get_policy()
+        missing, unexpected = policy.model.load_state_dict(payload["state_dict"], strict=False)
+        print(f"BCWarmStart: loaded {len(payload['state_dict'])} tensors from {src}; "
+              f"missing={list(missing)} unexpected={list(unexpected)} metrics={payload.get('metrics')}")
+        workers = getattr(algorithm, "env_runner_group", None) or getattr(algorithm, "workers", None)
+        if workers is not None:
+            workers.sync_weights()
+            print("BCWarmStart: weights synced to env runners")
 
 warnings.filterwarnings("ignore", category=UserWarning, module="gymnasium")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -178,6 +215,7 @@ def main():
         .resources(
             num_gpus=ppo_learner_num_gpus 
         )
+        .callbacks(BCWarmStartCallbacks)
         .debugging(
             log_level="INFO" 
         )
@@ -206,14 +244,15 @@ def main():
 
     if results_analysis:
         try:
-            best_trial = results_analysis.get_best_trial("episode_reward_mean", mode="max", scope="last")
+            metric = "env_runners/episode_return_mean"     # RLlib new API stack name (was episode_reward_mean)
+            best_trial = results_analysis.get_best_trial(metric, mode="max", scope="last")
             if best_trial:
                 print(f"Main Script: Best trial path (logical): {best_trial.path}") 
                 print(f"Main Script: Best trial config: {best_trial.config}")
                 print(f"Main Script: Best trial last result: {best_trial.last_result}")
                 
                 best_checkpoint_obj = results_analysis.get_best_checkpoint(
-                    best_trial, metric="episode_reward_mean", mode="max"
+                    best_trial, metric=metric, mode="max"
                 )
                 if best_checkpoint_obj:
                     best_checkpoint_path_str = str(best_checkpoint_obj.path if hasattr(best_checkpoint_obj, 'path') else best_checkpoint_obj)

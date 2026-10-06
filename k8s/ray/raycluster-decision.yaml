@@ -1,0 +1,57 @@
+# CPU-only Ray cluster for the decision-model runs: 4 workers x 26 CPU = 104 emulator slots,
+# pinned to the m6i.8xlarge `cpu-workers` pool. Equivalent to the notebook's CodeFlare
+# ClusterConfiguration cell, for people who prefer oc apply.
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: dd-decision
+  namespace: hello-chris-ai-4
+  labels:
+    kueue.x-k8s.io/queue-name: user-queue
+spec:
+  rayVersion: "2.44.0"
+  enableInTreeAutoscaling: false
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-cpus: "0"          # keep emulators off the head
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: quay.io/cnuland/dd-kuberay-worker:latest
+          ports:
+          - { containerPort: 6379, name: gcs }
+          - { containerPort: 8265, name: dashboard }
+          - { containerPort: 10001, name: client }
+          resources:
+            requests: { cpu: "4", memory: 8Gi }
+            limits:   { cpu: "6", memory: 12Gi }
+          env:
+          - { name: RAY_GRAFANA_HOST, value: "" }
+          volumeMounts:
+          - { name: shm, mountPath: /dev/shm }
+        volumes:
+        - name: shm
+          emptyDir: { medium: Memory, sizeLimit: 4Gi }
+  workerGroupSpecs:
+  - groupName: cpu-workers
+    replicas: 4
+    minReplicas: 4
+    maxReplicas: 4
+    rayStartParams: {}
+    template:
+      spec:
+        nodeSelector:
+          workload: ray-cpu
+        containers:
+        - name: ray-worker
+          image: quay.io/cnuland/dd-kuberay-worker:latest
+          resources:
+            requests: { cpu: "26", memory: 48Gi }
+            limits:   { cpu: "28", memory: 56Gi }
+          volumeMounts:
+          - { name: shm, mountPath: /dev/shm }
+        volumes:
+        - name: shm
+          emptyDir: { medium: Memory, sizeLimit: 8Gi }

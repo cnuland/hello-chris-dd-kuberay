@@ -1,0 +1,43 @@
+# Kueue wiring for the project namespace. RHOAI's Kueue component requires every RayCluster to
+# carry a kueue.x-k8s.io/queue-name label; the CodeFlare SDK sets it from local_queue=.
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: default-flavor
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: cluster-queue
+spec:
+  namespaceSelector: {}
+  resourceGroups:
+  - coveredResources: ["cpu", "memory", "pods", "nvidia.com/gpu"]
+    flavors:
+    - name: default-flavor
+      resources:
+      - name: cpu
+        nominalQuota: 200
+      - name: memory
+        nominalQuota: 800Gi
+      - name: pods
+        nominalQuota: 300
+      - name: nvidia.com/gpu
+        nominalQuota: "8"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hello-chris-ai-4
+  labels:
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: "Double Dragon decision model"
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: user-queue
+  namespace: hello-chris-ai-4
+spec:
+  clusterQueue: cluster-queue

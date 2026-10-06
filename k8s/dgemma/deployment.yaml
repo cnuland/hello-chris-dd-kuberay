@@ -1,0 +1,146 @@
+# 4 stateless DiffusionGemma decision-model replicas, one per g6e.2xlarge (1x L40S 48GB).
+# Each pod = vLLM (OpenAI API on :8000) + the structured_diffusion example server
+# sidecar (Jev-style /v1/systemone on :8011) from the same image, exactly as in
+# https://developers.redhat.com/articles/2026/09/28/run-decision-model-vllm-and-red-hat-ai
+#
+# Checkpoint: RedHatAI/diffusiongemma-26B-A4B-it-FP8-dynamic (~27 GB). BF16 (~50 GB) does not
+# fit a 48 GB card; FP8 leaves ~15 GB for KV cache and the diffusion canvas buffers.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dgemma
+  namespace: dgemma
+  labels:
+    app: dgemma
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: dgemma
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0        # no spare GPU to surge onto
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: dgemma
+    spec:
+      serviceAccountName: dgemma
+      nodeSelector:
+        workload: gpu
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      terminationGracePeriodSeconds: 60
+      volumes:
+      - name: cache            # HF download + vLLM/torch compile caches
+        emptyDir:
+          sizeLimit: 80Gi
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 8Gi
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:nightly-e9757321527ca1ecd514c07c1418dd2c53da3d19
+        args:
+        - "$(MODEL_ID)"
+        - --served-model-name=dgemma
+        - --host=0.0.0.0
+        - --port=8000
+        - --diffusion-config={"canvas_length":64}
+        - --max-logprobs=32
+        - --max-model-len=16384
+        - --max-num-seqs=32
+        - --limit-mm-per-prompt={"image":2}
+        - --gpu-memory-utilization=0.92
+        env:
+        - name: MODEL_ID
+          value: RedHatAI/diffusiongemma-26B-A4B-it-FP8-dynamic
+        - name: HOME
+          value: /cache
+        - name: HF_HOME
+          value: /cache/hf
+        - name: VLLM_CACHE_ROOT
+          value: /cache/vllm
+        - name: TRITON_CACHE_DIR
+          value: /cache/triton
+        - name: HF_HUB_ENABLE_HF_TRANSFER
+          value: "1"
+        - name: HF_TOKEN            # optional: only needed if you switch to a gated checkpoint
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              optional: true
+        ports:
+        - name: openai
+          containerPort: 8000
+        resources:
+          requests:
+            cpu: "5"
+            memory: 40Gi
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "7"
+            memory: 56Gi
+            nvidia.com/gpu: "1"
+        volumeMounts:
+        - name: cache
+          mountPath: /cache
+        - name: shm
+          mountPath: /dev/shm
+        startupProbe:                # 27 GB download + weight load + CUDA graph capture
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 15
+          failureThreshold: 120      # 30 min
+        readinessProbe:
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: 8000 }
+          periodSeconds: 30
+          failureThreshold: 6
+      - name: decision-server
+        image: vllm/vllm-openai:nightly-e9757321527ca1ecd514c07c1418dd2c53da3d19
+        command: ["python3"]
+        args:
+        - /vllm-workspace/examples/features/structured_diffusion/structured_server.py
+        - --upstream=http://127.0.0.1:8000
+        - --tokenizer=$(MODEL_ID)
+        - --model=dgemma
+        - --canvas=64
+        - --host=0.0.0.0
+        - --port=8011
+        env:
+        - name: MODEL_ID
+          value: RedHatAI/diffusiongemma-26B-A4B-it-FP8-dynamic
+        - name: HOME
+          value: /cache
+        - name: HF_HOME
+          value: /cache/hf
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+              optional: true
+        ports:
+        - name: decision
+          containerPort: 8011
+        resources:
+          requests: { cpu: "1", memory: 2Gi }
+          limits:   { cpu: "2", memory: 4Gi }
+        volumeMounts:
+        - name: cache
+          mountPath: /cache
+        startupProbe:
+          httpGet: { path: /health, port: 8011 }
+          periodSeconds: 15
+          failureThreshold: 120
+        readinessProbe:
+          httpGet: { path: /health, port: 8011 }
+          periodSeconds: 10
