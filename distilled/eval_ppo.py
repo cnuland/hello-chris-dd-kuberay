@@ -10,6 +10,7 @@ from typing import Dict, Any, List
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _paths  # noqa: E402  app/ddenv.py + app/custom_cnn_model.py
 from ddenv import DDEnv
 from radar import ScrollTracker
 _rd = importlib.util.spec_from_file_location("run_decision_dd", os.path.join(os.path.dirname(os.path.abspath(__file__)), "run-decision-dd.py"))

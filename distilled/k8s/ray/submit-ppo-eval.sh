@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Submits a PPO checkpoint evaluation to the dd-decision RayCluster from your laptop:
-#   1. stages app/ (code + ROM + save states, no venv) into the Ray head pod
+#   1. stages distilled/*.py + app/ddenv.py + app/custom_cnn_model.py + the ROM/save states from app/ignored (no venv) into the Ray head pod
 #   2. `ray job submit` from inside the head with that dir as the job's working_dir, so every
 #      Ray worker gets ddenv.py, decision_client.py and ignored/*.gb|*.state
-# Usage: k8s/ray/submit-decision-run.sh [extra run-decision-dd.py args]
-#   e.g. k8s/ray/submit-decision-run.sh --num-envs 100 --episodes-per-env 1 --max-steps 2048
+# Usage: distilled/k8s/ray/submit-decision-run.sh [extra run-decision-dd.py args]
+#   e.g. distilled/k8s/ray/submit-decision-run.sh --num-envs 100 --episodes-per-env 1 --max-steps 2048
 set -euo pipefail
 NS="${NS:-hello-chris-ai-4}"; RC="${RC:-dd-decision}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"   # repo root (script lives in distilled/k8s/ray)
+# MinIO keys come from the cluster Secret (never hard-coded): override with S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY
+S3_KEY="${S3_ACCESS_KEY_ID:-$(oc get secret minio-root-user -n minio -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d)}"
+S3_SECRET="${S3_SECRET_ACCESS_KEY:-$(oc get secret minio-root-user -n minio -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d)}"
+[ -n "$S3_SECRET" ] || { echo "no MinIO secret (set S3_SECRET_ACCESS_KEY or create minio/minio-root-user)"; exit 1; }
+
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d-%H%M%S)}"
 
 HEAD="$(oc get pods -n "$NS" -l "ray.io/cluster=$RC,ray.io/node-type=head" -o jsonpath='{.items[0].metadata.name}')"
@@ -15,7 +20,7 @@ HEAD="$(oc get pods -n "$NS" -l "ray.io/cluster=$RC,ray.io/node-type=head" -o js
 echo "==> head pod: $HEAD  run_tag: $RUN_TAG"
 
 STAGE="$(mktemp -d)"; mkdir -p "$STAGE/app/ignored"
-cp "$HERE"/app/*.py "$STAGE/app/"
+cp "$HERE"/distilled/*.py "$HERE"/app/ddenv.py "$HERE"/app/custom_cnn_model.py "$STAGE/app/"
 cp "$HERE"/app/ignored/*.gb "$HERE"/app/ignored/*.state "$STAGE/app/ignored/"
 echo "==> staging $(du -sh "$STAGE/app" | cut -f1) into $HEAD:/tmp/dd-ppoeval"
 oc exec -n "$NS" "$HEAD" -c ray-head -- rm -rf /tmp/dd-ppoeval
@@ -27,7 +32,7 @@ RUNTIME_ENV="$(cat <<JSON
    "DGEMMA_MODEL": "dgemma", "DGEMMA_TIMEOUT_S": "${DGEMMA_TIMEOUT_S:-30}", "DGEMMA_IMAGE_SCALE": "${DGEMMA_IMAGE_SCALE:-4}",
    "DGEMMA_INCLUDE_NATIVE_FRAME": "${DGEMMA_INCLUDE_NATIVE_FRAME:-0}",
    "S3_BUCKET_NAME": "sessions", "S3_ENDPOINT_URL": "http://minio.minio.svc:9000",
-   "S3_ACCESS_KEY_ID": "minio", "S3_SECRET_ACCESS_KEY": "minio123", "S3_REGION_NAME": "us-east-1"},
+   "S3_ACCESS_KEY_ID": "${S3_KEY}", "S3_SECRET_ACCESS_KEY": "${S3_SECRET}", "S3_REGION_NAME": "us-east-1"},
  "pip": ["boto3"],
  "excludes": ["__pycache__/", "*.pyc"]}
 JSON

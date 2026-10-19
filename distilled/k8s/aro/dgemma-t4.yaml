@@ -39,7 +39,7 @@ spec:
           sizeLimit: 16Gi   # NCCL shared memory for TP=2
       containers:
       - name: vllm
-        image: vllm/vllm-openai:nightly-e9757321527ca1ecd514c07c1418dd2c53da3d19
+        image: vllm/vllm-openai:v0.31.0
         # T4 (sm75) has 64KB shared memory per block; Triton's default 3-stage pipeline makes the unified attention
         # kernel ask for 96KB (512-wide heads x 32-token K/V tiles). Patch vLLM at start-up to launch it with 1 stage on pre-Ampere GPUs,
         # then exec the normal `vllm serve` with the args below. (FLEX_ATTENTION is not an option: its metadata builder
@@ -57,9 +57,24 @@ spec:
           anchor2 = "        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)\n"
           patch2 = anchor2 + "    if not current_platform.has_device_capability(80):  # T4/sm75 tile: head_size 512 x 32-token K/V tiles need 96KB\n        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, 16)\n        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, 16)\n"
           if "T4/sm75" not in s:
-              assert anchor in s and anchor2 in s, "anchor not found"
-              s = s.replace(anchor, patch, 1).replace(anchor2, patch2, 1); open(p, "w").write(s)
-              print("patched triton_unified_attention for sm75 (1 stage, 16-token tiles)")
+              if anchor in s and anchor2 in s:
+                  s = s.replace(anchor, patch, 1).replace(anchor2, patch2, 1); open(p, "w").write(s)
+                  print("patched triton_unified_attention for sm75 (1 stage, 16-token tiles)")
+              else:
+                  print("WARNING: sm75 patch anchors not found in this vLLM build - running unpatched")
+          PY
+          # sm75: keep top-k/top-p sampling off Triton. Only the sampling rank runs it, and its JIT warm-up loads kernels
+          # while the other tensor-parallel ranks sit in collectives: the pod hung in triton _init_handles for 77 min.
+          S=/usr/local/lib/python3.12/dist-packages/vllm/v1/sample/ops/topk_topp_sampler.py
+          python3 - "$S" <<'PY'
+          import sys
+          p = sys.argv[1]; s = open(p).read(); a = "    if HAS_TRITON:\n        return apply_top_k_top_p_triton(logits, k, p)\n"
+          if a in s and "sm75 sampler" not in s:
+              s = s.replace(a, "    from vllm.platforms import current_platform  # sm75 sampler: pytorch path\n"
+                               "    if HAS_TRITON and current_platform.has_device_capability(80):\n        return apply_top_k_top_p_triton(logits, k, p)\n", 1)
+              open(p, "w").write(s); print("patched top-k/top-p sampler: pytorch on sm75")
+          else:
+              print("WARNING: sampler patch anchor not found")
           PY
           exec vllm serve "$@"
         - vllm-serve
@@ -70,13 +85,13 @@ spec:
         - --port=8000
         - --diffusion-config={"canvas_length":64}
         - --max-logprobs=32
-        - --max-model-len=16384
-        - --max-num-seqs=8
+        - --max-model-len=8192          # prompts are < 2k tokens; frees KV memory for the sm75 sampler headroom
+        - --max-num-seqs=2               # sort scratch scales with seqs x canvas x vocab
         - --tensor-parallel-size=4
         - --dtype=half
         - --moe-backend=humming      # Triton's INT8 fused-MoE kernel cannot lower int8 dot on sm75 (PassManager::run failed)
         - --limit-mm-per-prompt={"image":2}
-        - --gpu-memory-utilization=0.92
+        - --gpu-memory-utilization=0.80   # headroom for the pytorch top-k/top-p sort on sm75 (1-1.5 GB scratch)
         env:
         - name: MODEL_ID
           value: aidendle94/diffusiongemma-26B-A4B-it-INT8-dynamic
@@ -88,6 +103,8 @@ spec:
           value: /cache/vllm
         - name: TRITON_CACHE_DIR
           value: /cache/triton
+        - name: CUDA_MODULE_LOADING   # EAGER: lazy first-launch module loads deadlocked behind spinning NCCL kernels
+          value: EAGER                #   (py-spy --native: TP0 in triton loadBinary, TP3 in a first cub sort, all in libcuda)
         - name: HF_HUB_ENABLE_HF_TRANSFER
           value: "1"
         - name: HF_TOKEN            # optional: only needed if you switch to a gated checkpoint
@@ -113,10 +130,13 @@ spec:
           mountPath: /cache
         - name: shm
           mountPath: /dev/shm
-        startupProbe:                # 27 GB download + weight load + CUDA graph capture
+        startupProbe:                # 27 GB download + weight load + CUDA graph capture + kernel warm-up
           httpGet: { path: /health, port: 8000 }
           periodSeconds: 15
-          failureThreshold: 120      # 30 min
+          failureThreshold: 360      # 90 min: on a FRESH T4 node vLLM's warm-up JIT-compiles the sm75-patched Triton
+                                     # kernels for well over 30 min (py-spy: warmup.py -> triton compiler). Do not skip
+                                     # it (--kernel-config enable_jit_warmup=false): the lazy compiles then stall one
+                                     # tensor-parallel rank per new batch shape and requests time out.
         readinessProbe:
           httpGet: { path: /health, port: 8000 }
           periodSeconds: 10
@@ -125,7 +145,7 @@ spec:
           periodSeconds: 30
           failureThreshold: 6
       - name: decision-server
-        image: vllm/vllm-openai:nightly-e9757321527ca1ecd514c07c1418dd2c53da3d19
+        image: vllm/vllm-openai:v0.31.0
         command: ["python3"]
         args:
         - /vllm-workspace/examples/features/structured_diffusion/structured_server.py

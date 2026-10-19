@@ -1,3 +1,6 @@
+import os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import _paths  # noqa: E402
 """Scripted mission-2 explorer that follows the same rules radar.suggested_rule encodes. Maps areas, reports
 stalls/deaths, saves a state at the first stall. Usage: python tests/m2_explorer.py <state> [iterations]"""
 import sys, collections, hashlib
@@ -9,7 +12,7 @@ from PIL import Image
 P = {"right": (WindowEvent.PRESS_ARROW_RIGHT, WindowEvent.RELEASE_ARROW_RIGHT), "left": (WindowEvent.PRESS_ARROW_LEFT, WindowEvent.RELEASE_ARROW_LEFT),
      "up": (WindowEvent.PRESS_ARROW_UP, WindowEvent.RELEASE_ARROW_UP), "down": (WindowEvent.PRESS_ARROW_DOWN, WindowEvent.RELEASE_ARROW_DOWN), "a": (WindowEvent.PRESS_BUTTON_A, WindowEvent.RELEASE_BUTTON_A)}
 state = sys.argv[1]; iters = int(sys.argv[2]) if len(sys.argv) > 2 else 1500
-pb = PyBoy("ignored/dd.gb", window_type="headless", debugging=False, disable_input=False); pb.set_emulation_speed(0)
+pb = PyBoy(_paths.asset("dd.gb"), window_type="headless", debugging=False, disable_input=False); pb.set_emulation_speed(0)
 pb.load_state(open(state, "rb")); [pb.tick() for _ in range(2)]
 bs = pb.botsupport_manager(); sc = ScrollTracker(pb)
 def hold(k, n): pb.send_input(P[k][0]); [pb.tick() for _ in range(n)]; pb.send_input(P[k][1]); sc.update()
@@ -62,8 +65,8 @@ for k in range(iters):
     if len(recent) == 120 and len(set(recent)) == 1 and not reach:
         print(f"k={k} STALL area={a} dist={sc.distance_px} vert={sc.vertical_px} player={r['player']} last={last} ladders={[(l['x'], l['dx'], l['top_y'], l['bottom_y'], l['at_top'], l['climbable'], l['on_it']) for l in r['ladders']]} pits={[(g['x'], g['dx_edge'], g['close']) for g in r['pits']]} doors={find_doors(pb)} bg={bg()}", flush=True)
         Image.fromarray(bs.screen().screen_ndarray()).resize((320, 288), Image.NEAREST).save("/tmp/m2x_stall.png")
-        with open("ignored/m2x-stall.state", "wb") as f: pb.save_state(f)
+        with open(_paths.asset("m2x-stall.state"), "wb") as f: pb.save_state(f)
         break
     if pb.get_memory_value(0xC499) == 0: print("DEAD"); break
-with open("ignored/m2x-end.state", "wb") as f: pb.save_state(f)
+with open(_paths.asset("m2x-end.state"), "wb") as f: pb.save_state(f)
 print("END areas", areas, "dist", sc.distance_px, "vert", sc.vertical_px, "lives", pb.get_memory_value(0xC499)); pb.stop()

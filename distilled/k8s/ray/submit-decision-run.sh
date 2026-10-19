@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Submits a decision-model run to the dd-decision RayCluster from your laptop:
-#   1. stages app/ (code + ROM + save states, no venv) into the Ray head pod
+#   1. stages distilled/*.py + app/ddenv.py + app/custom_cnn_model.py + the ROM/save states from app/ignored (no venv) into the Ray head pod
 #   2. `ray job submit` from inside the head with that dir as the job's working_dir, so every
 #      Ray worker gets ddenv.py, decision_client.py and ignored/*.gb|*.state
-# Usage: k8s/ray/submit-decision-run.sh [extra run-decision-dd.py args]
-#   e.g. k8s/ray/submit-decision-run.sh --num-envs 100 --episodes-per-env 1 --max-steps 2048
+# Usage: distilled/k8s/ray/submit-decision-run.sh [extra run-decision-dd.py args]
+#   e.g. distilled/k8s/ray/submit-decision-run.sh --num-envs 100 --episodes-per-env 1 --max-steps 2048
 set -euo pipefail
 NS="${NS:-hello-chris-ai-4}"; RC="${RC:-dd-decision}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"   # repo root (script lives in distilled/k8s/ray)
+# MinIO keys come from the cluster Secret (never hard-coded): override with S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY
+S3_KEY="${S3_ACCESS_KEY_ID:-$(oc get secret minio-root-user -n minio -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d)}"
+S3_SECRET="${S3_SECRET_ACCESS_KEY:-$(oc get secret minio-root-user -n minio -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d)}"
+[ -n "$S3_SECRET" ] || { echo "no MinIO secret (set S3_SECRET_ACCESS_KEY or create minio/minio-root-user)"; exit 1; }
+
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d-%H%M%S)}"
 
 HEAD="$(oc get pods -n "$NS" -l "ray.io/cluster=$RC,ray.io/node-type=head" -o jsonpath='{.items[0].metadata.name}')"
@@ -15,7 +20,7 @@ HEAD="$(oc get pods -n "$NS" -l "ray.io/cluster=$RC,ray.io/node-type=head" -o js
 echo "==> head pod: $HEAD  run_tag: $RUN_TAG"
 
 STAGE="$(mktemp -d)"; mkdir -p "$STAGE/app/ignored"
-cp "$HERE"/app/*.py "$STAGE/app/"
+cp "$HERE"/distilled/*.py "$HERE"/app/ddenv.py "$HERE"/app/custom_cnn_model.py "$STAGE/app/"
 cp "$HERE"/app/ignored/*.gb "$HERE"/app/ignored/*.state "$STAGE/app/ignored/"
 echo "==> staging $(du -sh "$STAGE/app" | cut -f1) into $HEAD:/tmp/dd-app"
 oc exec -n "$NS" "$HEAD" -c ray-head -- rm -rf /tmp/dd-app
@@ -28,7 +33,7 @@ RUNTIME_ENV="$(cat <<JSON
    "DGEMMA_INCLUDE_NATIVE_FRAME": "${DGEMMA_INCLUDE_NATIVE_FRAME:-0}", "DGEMMA_THINK_WHEN_STUCK": "${DGEMMA_THINK_WHEN_STUCK:-0}",
    "DD_AUTO_FLIGHT": "${DD_AUTO_FLIGHT:-align}", "DD_BOSS_TEXT": "${DD_BOSS_TEXT:-hybrid}", "DD_AUTO_BOSS": "${DD_AUTO_BOSS:-0}", "DD_SAVE_AREAS": "${DD_SAVE_AREAS:-}", "DD_AUTO_MIN_SEEN": "${DD_AUTO_MIN_SEEN:-6}", "DD_AUTO_ELBOW": "${DD_AUTO_ELBOW:-0}", "DD_PLAN_FIGHTS": "${DD_PLAN_FIGHTS:-}", "DD_PLAN_ANY_ENEMY": "${DD_PLAN_ANY_ENEMY:-}", "DD_PLAN_PROGRESS_W": "${DD_PLAN_PROGRESS_W:-1.0}", "DD_PLAN_ANY_ENEMY_PX": "${DD_PLAN_ANY_ENEMY_PX:-90}", "DD_PLAN_ESCAPE": "${DD_PLAN_ESCAPE-86}", "DD_NAV_PLAN": "${DD_NAV_PLAN:-1}", "DD_NAV_STALL_DECISIONS": "${DD_NAV_STALL_DECISIONS:-30}", "DD_NAV_WINDOW_STEPS": "${DD_NAV_WINDOW_STEPS:-1500}", "DD_NAV_STALL_STEPS": "${DD_NAV_STALL_STEPS:-900}", "DD_NAV_TIME_S": "${DD_NAV_TIME_S:-120}", "DD_NAV_PARTIAL_PX": "${DD_NAV_PARTIAL_PX:-24}", "DD_NAV_OPEN_PX": "${DD_NAV_OPEN_PX:-96}", "DD_PLAN_HP_W": "${DD_PLAN_HP_W:-12}", "DD_PLAN_MAX": "${DD_PLAN_MAX:-80}", "DD_PLAN_BEAM_M4": "${DD_PLAN_BEAM_M4:-40}", "DD_PLAN_ESCAPE_PX": "${DD_PLAN_ESCAPE_PX:-150}", "DD_PLAN_ESCAPE_DEPTH": "${DD_PLAN_ESCAPE_DEPTH:-420}", "DD_PLAN_ANY_ENEMY_ALWAYS": "${DD_PLAN_ANY_ENEMY_ALWAYS:-}", "DD_PLAN_SAFE_EXIT_PX": "${DD_PLAN_SAFE_EXIT_PX:-28}", "DD_PLAN_PARTIAL_STEPS": "${DD_PLAN_PARTIAL_STEPS:-60}", "DD_PLAN_BEAM": "${DD_PLAN_BEAM:-24}", "DD_PLAN_DEPTH": "${DD_PLAN_DEPTH:-260}", "DD_PLAN_TIME_S": "${DD_PLAN_TIME_S:-600}",
    "S3_BUCKET_NAME": "sessions", "S3_ENDPOINT_URL": "http://minio.minio.svc:9000",
-   "S3_ACCESS_KEY_ID": "minio", "S3_SECRET_ACCESS_KEY": "minio123", "S3_REGION_NAME": "us-east-1"},
+   "S3_ACCESS_KEY_ID": "${S3_KEY}", "S3_SECRET_ACCESS_KEY": "${S3_SECRET}", "S3_REGION_NAME": "us-east-1"},
  "pip": ["boto3"],
  "excludes": ["__pycache__/", "*.pyc"]}
 JSON

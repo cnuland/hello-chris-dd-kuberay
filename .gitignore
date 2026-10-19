@@ -63,3 +63,5 @@ sessions/
 .DS_Store
 /app/__pycache__/
 app/__pycache__/ddenv.cpython-311.pyc
+# editor/backup copies (one held an OpenShift token)
+*.bak

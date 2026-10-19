@@ -30,6 +30,7 @@ import glob
 import json
 import logging
 import os
+import _paths  # app/ on sys.path + ROM/state location (see _paths.py)
 import statistics
 import sys
 import time
@@ -619,13 +620,13 @@ def build_env_config(max_steps: int, save_video: bool, run_tag: str,
         "save_final_state": False,
         "early_stop": False,
         "action_freq": 8,
-        "init_state_dir": "ignored/",
+        "init_state_dir": os.path.join(_paths.assets_dir(), ""),
         "available_init_states": init_states or DEFAULT_INIT_STATES,
         "max_steps": max_steps,
         "print_rewards": False,
         "save_video": save_video,
         "fast_video": True,
-        "gb_path": "ignored/dd.gb",
+        "gb_path": _paths.asset("dd.gb"),
         "debug": False,
         "sim_frame_dist": 2_000_000.0,
         "use_screen_explore": True,
